@@ -3,23 +3,34 @@
 import {
   Activity,
   BadgeDollarSign,
+  Dumbbell,
   LayoutDashboard,
   NotebookTabs,
-  Dumbbell,
   UsersRound,
   X,
 } from "lucide-react";
 import Link from "next/link";
 
-export type NavigationPage = "Dashboard" | "Members" | "Memberships" | "Attendance" | "Payments" | "Trainers";
+export type NavigationPage =
+  | "Dashboard"
+  | "Members"
+  | "Memberships"
+  | "Attendance"
+  | "Payments"
+  | "Trainers";
 
-const navigation = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard },
-  { label: "Members", href: "/members", icon: UsersRound },
-  { label: "Memberships", href: "/memberships", icon: NotebookTabs },
-  { label: "Attendance", href: "/attendance", icon: Activity },
-  { label: "Payments", href: "/payments", icon: BadgeDollarSign },
-  { label: "Trainers & Workouts", href: "/trainers", icon: Dumbbell },
+const navigation: Array<{
+  id: NavigationPage;
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+}> = [
+  { id: "Dashboard", label: "Dashboard", href: "/", icon: LayoutDashboard },
+  { id: "Members", label: "Members", href: "/members", icon: UsersRound },
+  { id: "Memberships", label: "Memberships", href: "/memberships", icon: NotebookTabs },
+  { id: "Attendance", label: "Attendance", href: "/attendance", icon: Activity },
+  { id: "Payments", label: "Payments", href: "/payments", icon: BadgeDollarSign },
+  { id: "Trainers", label: "Trainers & Workouts", href: "/trainers", icon: Dumbbell },
 ];
 
 type SidebarProps = {
@@ -73,42 +84,26 @@ export function Sidebar({ activePage, open, onClose }: SidebarProps) {
           Workspace
         </p>
         <nav id="primary-navigation" aria-label="Primary navigation" className="space-y-1">
-          {navigation.map(({ label, href, icon: Icon }) =>
-            href ? (
+          {navigation.map(({ id, label, href, icon: Icon }) => {
+            const isActive = activePage === id;
+            return (
               <Link
-                key={label}
+                key={id}
                 href={href}
-                aria-current={activePage === label ? "page" : undefined}
+                aria-current={isActive ? "page" : undefined}
                 onClick={onClose}
                 className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-[13px] font-medium ${
-                  activePage === label
+                  isActive
                     ? "bg-white/10 text-white"
                     : "text-slate-300 hover:bg-white/5 hover:text-white"
                 }`}
               >
                 <Icon size={18} aria-hidden="true" />
                 <span>{label}</span>
-                {activePage === label && (
-                  <span className="ml-auto h-5 w-1 rounded-full bg-[#63c69d]" />
-                )}
+                {isActive && <span className="ml-auto h-5 w-1 rounded-full bg-[#63c69d]" />}
               </Link>
-            ) : (
-              <button
-                key={label}
-                type="button"
-                disabled
-                aria-disabled="true"
-                title={`${label} — coming soon`}
-                className="flex min-h-11 w-full cursor-not-allowed items-center gap-3 rounded-xl px-3 text-left text-[13px] font-medium text-slate-400/75"
-              >
-                <Icon size={18} aria-hidden="true" />
-                <span>{label}</span>
-                <span className="ml-auto text-[9px] font-medium uppercase tracking-wide text-slate-500">
-                  Soon
-                </span>
-              </button>
-            ),
-          )}
+            );
+          })}
         </nav>
 
         <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.045] p-4">

@@ -1,12 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
 import { Plus, Search, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 
 type MemberStatus = "Active" | "Expiring" | "Inactive";
 type StatusFilter = "All" | MemberStatus;
+type PaymentMethod = "Cash" | "Card" | "Instapay";
+type PaymentStatus = "Paid" | "Pending";
 
 type Member = {
   id: string;
@@ -18,6 +27,13 @@ type Member = {
   expiryDate: string;
 };
 
+type PlanOption = {
+  id: string;
+  name: string;
+  price: number;
+  durationMonths: number;
+};
+
 type NewMemberInput = {
   name: string;
   phone: string;
@@ -26,7 +42,15 @@ type NewMemberInput = {
   price: number;
   startDate: string;
   duration: number;
+  paymentMethod: PaymentMethod;
+  paymentStatus: PaymentStatus;
 };
+
+const defaultPlans: PlanOption[] = [
+  { id: "default-1", name: "1 Month Regular", price: 1800, durationMonths: 1 },
+  { id: "default-3", name: "3 Month Saver", price: 4500, durationMonths: 3 },
+  { id: "default-12", name: "VIP Annual", price: 18000, durationMonths: 12 },
+];
 
 function toLocalDateInputValue(date: Date) {
   const year = date.getFullYear();
@@ -120,7 +144,9 @@ function StatusBadge({ status }: { status: MemberStatus }) {
   };
 
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium ${styles[status]}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium ${styles[status]}`}
+    >
       <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
       {status}
     </span>
@@ -128,20 +154,41 @@ function StatusBadge({ status }: { status: MemberStatus }) {
 }
 
 type AddMemberModalProps = {
+  plans: PlanOption[];
   onClose: () => void;
   onAdd: (member: NewMemberInput) => Promise<void>;
   isSubmitting: boolean;
   submitError: string | null;
 };
 
-function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMemberModalProps) {
+function AddMemberModal({
+  plans,
+  onClose,
+  onAdd,
+  isSubmitting,
+  submitError,
+}: AddMemberModalProps) {
+  const availablePlans = plans.length > 0 ? plans : defaultPlans;
+  const initialPlan = availablePlans[0];
+
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [plan, setPlan] = useState("Standard");
-  const [price, setPrice] = useState("");
+  const [plan, setPlan] = useState(initialPlan.name);
+  const [price, setPrice] = useState(String(initialPlan.price));
   const [startDate, setStartDate] = useState(dateOffset(0));
-  const [duration, setDuration] = useState("3");
+  const [duration, setDuration] = useState(String(initialPlan.durationMonths));
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash");
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("Paid");
+
+  function handlePlanChange(selectedName: string) {
+    setPlan(selectedName);
+    const matching = availablePlans.find((item) => item.name === selectedName);
+    if (matching) {
+      setPrice(String(matching.price));
+      setDuration(String(matching.durationMonths));
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -153,6 +200,8 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
       price: Number(price),
       startDate,
       duration: Number(duration),
+      paymentMethod,
+      paymentStatus,
     });
   }
 
@@ -178,7 +227,7 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
           if (event.key === "Tab") {
             const focusable = Array.from(
               event.currentTarget.querySelectorAll<HTMLElement>(
-                'button:not([disabled]), input:not([disabled]), select:not([disabled])',
+                "button:not([disabled]), input:not([disabled]), select:not([disabled])",
               ),
             );
             const first = focusable[0];
@@ -192,15 +241,19 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
             }
           }
         }}
-        className="my-auto w-full max-w-[500px] rounded-2xl bg-white p-5 shadow-[0_24px_80px_rgba(15,23,42,0.2)] sm:p-7"
+        className="my-auto w-full max-w-[520px] rounded-2xl bg-white p-5 shadow-[0_24px_80px_rgba(15,23,42,0.2)] sm:p-7"
       >
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <h2 id="add-member-title" className="text-[19px] font-semibold tracking-[-0.03em] text-[#263344]">
+            <h2
+              id="add-member-title"
+              className="text-[19px] font-semibold tracking-[-0.03em] text-[#263344]"
+            >
               Add a member
             </h2>
             <p id="add-member-description" className="mt-1.5 text-[12px] text-[#84909d]">
-              Add their details to your gym member list.
+              Register their membership and record initial payment. They can activate their
+              Member App login anytime with the same phone or email.
             </p>
           </div>
           <button
@@ -215,13 +268,19 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {submitError && (
-            <p role="alert" className="rounded-lg bg-[#fff0ef] px-3 py-2 text-[12px] text-[#b34e48]">
+            <p
+              role="alert"
+              className="rounded-lg bg-[#fff0ef] px-3 py-2 text-[12px] text-[#b34e48]"
+            >
               {submitError}
             </p>
           )}
           <div>
-            <label htmlFor="member-name" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
-              Name
+            <label
+              htmlFor="member-name"
+              className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+            >
+              Full name
             </label>
             <input
               autoFocus
@@ -232,62 +291,79 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
               maxLength={80}
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="e.g. Avery Johnson"
-              className="min-h-11 w-full rounded-lg border border-[#e3e8ec] px-3 text-[13px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
-            />
-          </div>
-          <div>
-            <label htmlFor="member-phone" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
-              Phone
-            </label>
-            <input
-              id="member-phone"
-              name="phone"
-              type="tel"
-              autoComplete="tel"
-              required
-              maxLength={30}
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="e.g. (415) 555-0123"
-              className="min-h-11 w-full rounded-lg border border-[#e3e8ec] px-3 text-[13px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
-            />
-          </div>
-          <div>
-            <label htmlFor="member-email" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
-              Email <span className="font-normal text-[#9aa3ae]">(optional)</span>
-            </label>
-            <input
-              id="member-email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              maxLength={254}
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="e.g. avery@example.com"
+              placeholder="e.g. Nour Hassan"
               className="min-h-11 w-full rounded-lg border border-[#e3e8ec] px-3 text-[13px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
             />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="member-plan" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
-                Plan
+              <label
+                htmlFor="member-phone"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Phone
+              </label>
+              <input
+                id="member-phone"
+                name="phone"
+                type="tel"
+                autoComplete="tel"
+                required
+                maxLength={30}
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="e.g. +20 100 123 4567"
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] px-3 text-[13px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="member-email"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Email <span className="font-normal text-[#9aa3ae]">(optional)</span>
+              </label>
+              <input
+                id="member-email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                maxLength={254}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="e.g. nour@example.com"
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] px-3 text-[13px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label
+                htmlFor="member-plan"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Membership plan
               </label>
               <select
                 id="member-plan"
                 name="plan"
                 value={plan}
-                onChange={(event) => setPlan(event.target.value)}
+                onChange={(event) => handlePlanChange(event.target.value)}
                 className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
               >
-                <option>Basic</option>
-                <option>Standard</option>
-                <option>Premium</option>
+                {availablePlans.map((option) => (
+                  <option key={option.id} value={option.name}>
+                    {option.name}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
-              <label htmlFor="member-duration" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
+              <label
+                htmlFor="member-duration"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
                 Duration
               </label>
               <select
@@ -297,43 +373,92 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
                 onChange={(event) => setDuration(event.target.value)}
                 className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
               >
-                <option value="1">1 month</option>
-                <option value="3">3 months</option>
-                <option value="6">6 months</option>
-                <option value="12">12 months</option>
+                {[1, 2, 3, 6, 9, 12, 24].map((months) => (
+                  <option key={months} value={months}>
+                    {months} {months === 1 ? "month" : "months"}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
-          <div>
-            <label htmlFor="member-price" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
-              Membership price (EGP)
-            </label>
-            <input
-              id="member-price"
-              name="price"
-              type="number"
-              min="0"
-              step="0.01"
-              required
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-              className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
-            />
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label
+                htmlFor="member-price"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Price (EGP)
+              </label>
+              <input
+                id="member-price"
+                name="price"
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                value={price}
+                onChange={(event) => setPrice(event.target.value)}
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="member-start-date"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Start date
+              </label>
+              <input
+                id="member-start-date"
+                name="startDate"
+                type="date"
+                required
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              />
+            </div>
           </div>
-          <div>
-            <label htmlFor="member-start-date" className="mb-1.5 block text-[11px] font-medium text-[#526071]">
-              Start date
-            </label>
-            <input
-              id="member-start-date"
-              name="startDate"
-              type="date"
-              required
-              value={startDate}
-              onChange={(event) => setStartDate(event.target.value)}
-              className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
-            />
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label
+                htmlFor="member-payment-status"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Payment status
+              </label>
+              <select
+                id="member-payment-status"
+                value={paymentStatus}
+                onChange={(event) => setPaymentStatus(event.target.value as PaymentStatus)}
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              >
+                <option value="Paid">Paid (ready for check-in)</option>
+                <option value="Pending">Pending</option>
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="member-payment-method"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Payment method
+              </label>
+              <select
+                id="member-payment-method"
+                value={paymentMethod}
+                onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              >
+                <option value="Cash">Cash</option>
+                <option value="Card">Card</option>
+                <option value="Instapay">Instapay</option>
+              </select>
+            </div>
           </div>
+
           <div className="flex flex-col-reverse gap-2 border-t border-[#edf0f2] pt-5 sm:flex-row sm:justify-end">
             <button
               type="button"
@@ -359,6 +484,7 @@ function AddMemberModal({ onClose, onAdd, isSubmitting, submitError }: AddMember
 
 export function MembersPage() {
   const [members, setMembers] = useState<Member[]>([]);
+  const [plans, setPlans] = useState<PlanOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -371,7 +497,17 @@ export function MembersPage() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      setMembers(await fetchMembers());
+      const [loadedMembers, membershipsRes] = await Promise.all([
+        fetchMembers(),
+        fetch("/api/memberships", { cache: "no-store" }).catch(() => null),
+      ]);
+      setMembers(loadedMembers);
+      if (membershipsRes && membershipsRes.ok) {
+        const body = (await membershipsRes.json()) as { plans?: PlanOption[] };
+        if (Array.isArray(body.plans)) {
+          setPlans(body.plans);
+        }
+      }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Unable to load members.");
     } finally {
@@ -381,6 +517,9 @@ export function MembersPage() {
 
   useEffect(() => {
     void loadMembers();
+    const onUpdated = () => void loadMembers();
+    window.addEventListener("gymos:membership-updated", onUpdated);
+    return () => window.removeEventListener("gymos:membership-updated", onUpdated);
   }, [loadMembers]);
 
   const counts = useMemo(
@@ -400,6 +539,7 @@ export function MembersPage() {
       const matchesSearch =
         !query ||
         member.name.toLowerCase().includes(query) ||
+        (member.email?.toLowerCase().includes(query) ?? false) ||
         (phoneQuery.length > 0 && member.phone.replace(/\D/g, "").includes(phoneQuery));
       const matchesStatus = statusFilter === "All" || member.status === statusFilter;
       return matchesSearch && matchesStatus;
@@ -422,6 +562,8 @@ export function MembersPage() {
           price: member.price,
           startDate: member.startDate,
           duration: member.duration,
+          paymentMethod: member.paymentMethod,
+          paymentStatus: member.paymentStatus,
         }),
       });
 
@@ -465,9 +607,16 @@ export function MembersPage() {
 
         <section aria-label="Member list">
           {loadError && (
-            <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#f1d2cf] bg-[#fff8f7] px-4 py-3 text-[12px] text-[#a54c46]">
+            <div
+              role="alert"
+              className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#f1d2cf] bg-[#fff8f7] px-4 py-3 text-[12px] text-[#a54c46]"
+            >
               <span>Could not load members: {loadError}</span>
-              <button type="button" onClick={() => void loadMembers()} className="font-semibold underline underline-offset-2">
+              <button
+                type="button"
+                onClick={() => void loadMembers()}
+                className="font-semibold underline underline-offset-2"
+              >
                 Try again
               </button>
             </div>
@@ -503,7 +652,7 @@ export function MembersPage() {
                 ))}
               </div>
               <label className="relative block w-full lg:max-w-[300px]">
-                <span className="sr-only">Search members by name or phone</span>
+                <span className="sr-only">Search members by name, email, or phone</span>
                 <Search
                   size={16}
                   aria-hidden="true"
@@ -513,7 +662,7 @@ export function MembersPage() {
                   type="search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search name or phone..."
+                  placeholder="Search name, phone, or email..."
                   className="min-h-10 w-full rounded-lg border border-[#e7ebee] bg-white pl-9 pr-3 text-[12px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
                 />
               </label>
@@ -524,22 +673,31 @@ export function MembersPage() {
                 <caption className="sr-only">Gym members and membership details</caption>
                 <thead>
                   <tr className="bg-[#fafbfc]">
-                    {["Name", "Phone", "Membership type", "Status", "Expiry date"].map((heading) => (
-                      <th
-                        key={heading}
-                        scope="col"
-                        className="px-5 py-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8993a0]"
-                      >
-                        {heading}
-                      </th>
-                    ))}
+                    {["Name", "Phone", "Membership type", "Status", "Expiry date"].map(
+                      (heading) => (
+                        <th
+                          key={heading}
+                          scope="col"
+                          className="px-5 py-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8993a0]"
+                        >
+                          {heading}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#eff1f4]">
                   {filteredMembers.map((member) => (
                     <tr key={member.id} className="transition-colors hover:bg-[#fbfcfc]">
-                      <th scope="row" className="px-5 py-4 text-[12px] font-semibold text-[#354153]">
-                        {member.name}
+                      <th scope="row" className="px-5 py-4">
+                        <span className="block text-[12px] font-semibold text-[#354153]">
+                          {member.name}
+                        </span>
+                        {member.email && (
+                          <span className="mt-0.5 block text-[10px] font-normal text-[#8993a0]">
+                            {member.email}
+                          </span>
+                        )}
                       </th>
                       <td className="px-5 py-4 text-[12px] text-[#6f7b89]">{member.phone}</td>
                       <td className="px-5 py-4 text-[12px] text-[#596575]">{member.plan}</td>
@@ -567,7 +725,11 @@ export function MembersPage() {
                   )}
                   {isLoading && (
                     <tr>
-                      <td colSpan={5} role="status" className="px-5 py-12 text-center text-[13px] text-[#788391]">
+                      <td
+                        colSpan={5}
+                        role="status"
+                        className="px-5 py-12 text-center text-[13px] text-[#788391]"
+                      >
                         Loading members...
                       </td>
                     </tr>
@@ -578,8 +740,8 @@ export function MembersPage() {
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#edf0f2] px-5 py-3.5 text-[10px] text-[#8993a0]">
               <span>
-                Showing <span className="font-semibold text-[#596575]">{filteredMembers.length}</span> of{" "}
-                <span className="font-semibold text-[#596575]">{members.length}</span> members
+                Showing <span className="font-semibold text-[#596575]">{filteredMembers.length}</span>{" "}
+                of <span className="font-semibold text-[#596575]">{members.length}</span> members
               </span>
               <span>Member records are loaded from your gym database.</span>
             </div>
@@ -588,6 +750,7 @@ export function MembersPage() {
       </main>
       {isModalOpen && (
         <AddMemberModal
+          plans={plans}
           onClose={() => {
             if (!isSubmitting) {
               setIsModalOpen(false);

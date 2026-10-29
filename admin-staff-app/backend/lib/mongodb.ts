@@ -90,7 +90,9 @@ export async function connectToDatabase(): Promise<Mongoose> {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
-      dns.setServers([resolvers[attempt % resolvers.length]]);
+      if (uri.startsWith("mongodb+srv://") || dnsServers.length > 0) {
+        dns.setServers([resolvers[attempt % resolvers.length]]);
+      }
       try {
         return await mongoose.connect(uri, {
           bufferCommands: false,

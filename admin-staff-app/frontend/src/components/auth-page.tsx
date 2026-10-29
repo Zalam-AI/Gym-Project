@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, ShieldCheck } from "lucide-react";
+import { clearStaffSessionToken, setStaffSessionToken } from "@/lib/staff-client-auth";
 
 type AuthPageProps = {
   mode: "login" | "register";
@@ -24,6 +25,7 @@ export function AuthPage({ mode }: AuthPageProps) {
     event.preventDefault();
     setError("");
     setPending(true);
+    clearStaffSessionToken();
 
     try {
       const response = await fetch(`/api/auth/${mode}`, {
@@ -35,10 +37,16 @@ export function AuthPage({ mode }: AuthPageProps) {
           password,
         }),
       });
-      const result = (await response.json()) as { error?: string };
+      const result = (await response.json()) as {
+        error?: string;
+        sessionToken?: string;
+      };
       if (!response.ok) {
         setError(result.error ?? "We couldn't complete your request. Please try again.");
         return;
+      }
+      if (result.sessionToken) {
+        setStaffSessionToken(result.sessionToken, isRegister || rememberMe);
       }
 
       const requestedPath = new URLSearchParams(window.location.search).get("next");

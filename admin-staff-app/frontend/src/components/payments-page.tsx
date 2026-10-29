@@ -378,6 +378,9 @@ export function PaymentsPage() {
 
   useEffect(() => {
     void loadPayments();
+    const onUpdated = () => void loadPayments();
+    window.addEventListener("gymos:membership-updated", onUpdated);
+    return () => window.removeEventListener("gymos:membership-updated", onUpdated);
   }, [loadPayments]);
 
   const filteredTransactions = useMemo(() => {
