@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
-import { Check, CheckCircle2, Plus, RefreshCw, X } from "lucide-react";
-import { AppShell } from "@/components/app-shell";
+import { Check, CheckCircle2, Plus, RefreshCw, Smartphone, X } from "lucide-react";
+import { AppShell, type PendingMembershipRequest } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 
 type Plan = {
@@ -312,6 +312,8 @@ function RenewalModal({ subscription, plan, onClose, onConfirm, isSaving, error 
 export function MembershipsPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [pendingMobileRequests, setPendingMobileRequests] = useState<PendingMembershipRequest[]>([]);
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [apiError, setApiError] = useState("");
@@ -322,11 +324,18 @@ export function MembershipsPage() {
     setIsLoading(true);
     setApiError("");
     try {
-      const response = await fetch("/api/memberships", { cache: "no-store" });
+      const [response, reqRes] = await Promise.all([
+        fetch("/api/memberships", { cache: "no-store" }),
+        fetch("/api/membership-requests", { cache: "no-store" }),
+      ]);
       const data = await response.json() as { plans?: Plan[]; subscriptions?: Subscription[]; error?: string };
       if (!response.ok) throw new Error(data.error ?? "Unable to load memberships.");
       setPlans(data.plans ?? []);
       setSubscriptions(data.subscriptions ?? []);
+      if (reqRes.ok) {
+        const reqBody = (await reqRes.json()) as { requests?: PendingMembershipRequest[] };
+        setPendingMobileRequests(reqBody.requests ?? []);
+      }
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Unable to load memberships.");
     } finally {
@@ -334,8 +343,31 @@ export function MembershipsPage() {
     }
   }
 
+  async function handleMobileRequestAction(requestId: string, action: "accept" | "decline") {
+    setProcessingRequestId(requestId);
+    setApiError("");
+    try {
+      const response = await fetch("/api/membership-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, requestId }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Unable to update membership request.");
+      window.dispatchEvent(new CustomEvent("gymos:membership-updated"));
+      await loadMemberships();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to update membership request.");
+    } finally {
+      setProcessingRequestId(null);
+    }
+  }
+
   useEffect(() => {
     void loadMemberships();
+    const onUpdated = () => void loadMemberships();
+    window.addEventListener("gymos:membership-updated", onUpdated);
+    return () => window.removeEventListener("gymos:membership-updated", onUpdated);
   }, []);
 
   async function addPlan(plan: Omit<Plan, "id">) {
@@ -397,6 +429,68 @@ export function MembershipsPage() {
         </div>
         {apiError && !isPlanModalOpen && renewingSubscriptionId === null && (
           <p role="alert" className="mb-5 rounded-lg border border-[#f1d2cd] bg-[#fff6f4] px-4 py-3 text-[12px] text-[#a9433b]">{apiError}</p>
+        )}
+
+        {pendingMobileRequests.length > 0 && (
+          <section aria-labelledby="mobile-requests-heading" className="mb-8">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="grid size-7 place-items-center rounded-lg bg-[#eaf6f0] text-[#278968]">
+                <Smartphone size={15} aria-hidden="true" />
+              </span>
+              <div>
+                <h2 id="mobile-requests-heading" className="text-[16px] font-semibold tracking-[-0.02em] text-[#273445]">
+                  Pending Mobile App Subscription Requests ({pendingMobileRequests.length})
+                </h2>
+                <p className="text-[11px] text-[#87909d]">
+                  Members who scanned your gym QR code and selected a plan &amp; payment method
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {pendingMobileRequests.map((req) => {
+                const busy = processingRequestId === req.id;
+                return (
+                  <Card key={req.id} className="border-[#cfe9dc] bg-[#f7fcfa] p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[14px] font-semibold text-[#243242]">{req.memberName}</p>
+                        <p className="mt-0.5 text-[11px] text-[#74808e]">
+                          {req.memberPhone}
+                          {req.memberEmail ? ` · ${req.memberEmail}` : ""}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-[#eaf6f0] px-2.5 py-1 text-[10px] font-semibold text-[#278968]">
+                        Via {req.paymentMethod}
+                      </span>
+                    </div>
+                    <div className="mt-3.5 flex items-center justify-between rounded-xl border border-[#e3efe8] bg-white px-3.5 py-2.5">
+                      <span className="text-[12px] font-medium text-[#354153]">{req.planName}</span>
+                      <span className="text-[14px] font-bold text-[#1f2b39]">{formatEgp(req.price)}</span>
+                    </div>
+                    <div className="mt-3.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleMobileRequestAction(req.id, "accept")}
+                        className="inline-flex min-h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#278968] px-3.5 text-[11px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+                      >
+                        <Check size={14} aria-hidden="true" />
+                        {busy ? "Processing…" : "Accept Payment & Activate"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleMobileRequestAction(req.id, "decline")}
+                        className="inline-flex min-h-9 items-center justify-center rounded-lg border border-[#e3e8ec] bg-white px-3 text-[11px] font-medium text-[#687585] hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          </section>
         )}
 
         <section aria-labelledby="plans-heading" className="mb-8">

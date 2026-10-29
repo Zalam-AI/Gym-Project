@@ -5,6 +5,7 @@ import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import PaymentModel from "gymos-admin-backend/models/payment";
+import { resolveActiveGymId } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
 
@@ -12,11 +13,6 @@ const paymentMethods = ["Cash", "Card", "Instapay"] as const;
 const paymentStatuses = ["Paid", "Partial", "Pending", "Overdue"] as const;
 type PaymentMethod = (typeof paymentMethods)[number];
 type PaymentStatus = (typeof paymentStatuses)[number];
-
-function getActiveGymId() {
-  const gymId = process.env.GYMOS_GYM_ID;
-  return gymId && Types.ObjectId.isValid(gymId) ? new Types.ObjectId(gymId) : null;
-}
 
 function startOfToday(date = new Date()) {
   const start = new Date(date);
@@ -30,8 +26,8 @@ function startOfMonth(date = new Date()) {
   return start;
 }
 
-export async function GET() {
-  const gymId = getActiveGymId();
+export async function GET(request: Request) {
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
 
   try {
@@ -87,7 +83,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const gymId = getActiveGymId();
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
 
   let input: Record<string, unknown>;

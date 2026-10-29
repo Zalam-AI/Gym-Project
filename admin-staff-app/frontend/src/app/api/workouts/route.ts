@@ -4,13 +4,9 @@ import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import WorkoutPlanModel from "gymos-admin-backend/models/workout-plan";
+import { resolveActiveGymId } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
-
-function getActiveGymId() {
-  const gymId = process.env.GYMOS_GYM_ID;
-  return gymId && Types.ObjectId.isValid(gymId) ? new Types.ObjectId(gymId) : null;
-}
 
 async function parseBody(request: Request) {
   try {
@@ -45,8 +41,8 @@ function serializePlan(plan: {
   };
 }
 
-export async function GET() {
-  const gymId = getActiveGymId();
+export async function GET(request: Request) {
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
 
   try {
@@ -74,7 +70,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const gymId = getActiveGymId();
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
   const parsed = await parseBody(request);
   if (!parsed.input) return NextResponse.json({ error: parsed.error }, { status: 400 });

@@ -1,25 +1,23 @@
 import { NextResponse } from "next/server";
-import { Types } from "mongoose";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
+import PaymentModel from "gymos-admin-backend/models/payment";
+import { resolveActiveGymId } from "@/lib/gym-context";
+import { buildPhoneCandidates, normalizePhone } from "@/lib/member-auth";
 
 export const runtime = "nodejs";
 
 const allowedStatuses = ["active", "expired", "suspended"] as const;
+const paymentMethods = ["Cash", "Card", "Instapay"] as const;
+const paymentStatuses = ["Paid", "Pending"] as const;
 type MemberStatus = (typeof allowedStatuses)[number];
+type PaymentMethod = (typeof paymentMethods)[number];
+type PaymentStatus = (typeof paymentStatuses)[number];
 
-function getActiveGymId() {
-  const gymId = process.env.GYMOS_GYM_ID;
-  if (!gymId || !Types.ObjectId.isValid(gymId)) {
-    return null;
-  }
-  return new Types.ObjectId(gymId);
-}
-
-export async function GET() {
-  const gymId = getActiveGymId();
+export async function GET(request: Request) {
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) {
     return NextResponse.json(
       { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
@@ -34,14 +32,12 @@ export async function GET() {
       return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
     }
 
-    const records = await MemberModel.find({ gymId })
-      .sort({ createdAt: -1 });
+    const records = await MemberModel.find({ gymId }).sort({ createdAt: -1 });
     const memberIds = records.map((member) => member._id);
     const memberships = await MembershipModel.find({
       gymId,
       memberId: { $in: memberIds },
-    })
-      .sort({ expiryDate: -1 });
+    }).sort({ expiryDate: -1 });
     const membershipsByMember = new Map<string, (typeof memberships)[number]>();
     for (const membership of memberships) {
       const memberId = membership.memberId.toString();
@@ -66,7 +62,7 @@ export async function GET() {
         phone: member.phone,
         email: member.email,
         plan: membership?.planName ?? "—",
-        status: isExpired ? "Inactive" : daysUntilExpiry <= 30 ? "Expiring" : "Active",
+        status: isExpired ? "Inactive" : daysUntilExpiry <= 7 ? "Expiring" : "Active",
         expiryDate: expiryDate.toISOString().slice(0, 10),
       };
     });
@@ -82,7 +78,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const gymId = getActiveGymId();
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) {
     return NextResponse.json(
       { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
@@ -103,7 +99,8 @@ export async function POST(request: Request) {
 
   const input = body as Record<string, unknown>;
   const fullName = typeof input.fullName === "string" ? input.fullName.trim() : "";
-  const phone = typeof input.phone === "string" ? input.phone.trim() : "";
+  const rawPhone = typeof input.phone === "string" ? input.phone.trim() : "";
+  const phone = normalizePhone(rawPhone) || rawPhone;
   if (!fullName || !phone) {
     return NextResponse.json(
       { error: "fullName and phone are required." },
@@ -111,7 +108,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const email = typeof input.email === "string" ? input.email.trim().toLowerCase() : undefined;
+  const email = typeof input.email === "string" && input.email.trim()
+    ? input.email.trim().toLowerCase()
+    : undefined;
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: "email must be a valid email address." }, { status: 400 });
   }
@@ -148,6 +147,22 @@ export async function POST(request: Request) {
     );
   }
 
+  const paymentStatus = (input.paymentStatus ?? "Paid") as string;
+  if (!paymentStatuses.includes(paymentStatus as PaymentStatus)) {
+    return NextResponse.json(
+      { error: "paymentStatus must be Paid or Pending." },
+      { status: 400 },
+    );
+  }
+
+  const paymentMethod = (input.paymentMethod ?? "Cash") as string;
+  if (!paymentMethods.includes(paymentMethod as PaymentMethod)) {
+    return NextResponse.json(
+      { error: "paymentMethod must be Cash, Card, or Instapay." },
+      { status: 400 },
+    );
+  }
+
   let joinDate: Date | undefined;
   const startDateValue = input.startDate ?? input.joinDate;
   if (startDateValue !== undefined) {
@@ -167,10 +182,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
     }
 
+    const phoneCandidates = buildPhoneCandidates(rawPhone);
+    const duplicateConditions: Array<Record<string, unknown>> = [
+      { phone: { $in: phoneCandidates.length ? phoneCandidates : [phone] } },
+    ];
+    if (email) {
+      duplicateConditions.push({ email });
+    }
+    const existingMember = await MemberModel.exists({ gymId, $or: duplicateConditions });
+    if (existingMember) {
+      return NextResponse.json(
+        { error: "A member with this phone number or email already exists in your gym." },
+        { status: 409 },
+      );
+    }
+
     const membershipStart = joinDate ?? new Date();
     const expiryDate = new Date(membershipStart);
     expiryDate.setMonth(expiryDate.getMonth() + duration);
-    const memberStatus = expiryDate < new Date() ? "expired" : statusValue;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const memberStatus = expiryDate < today ? "expired" : statusValue;
+
     const member = await MemberModel.create({
       gymId,
       fullName,
@@ -188,9 +221,23 @@ export async function POST(request: Request) {
         price,
         startDate: membershipStart,
         expiryDate,
-        status: memberStatus,
+        status: memberStatus === "expired" ? "expired" : "active",
+        paymentStatus: paymentStatus as PaymentStatus,
       });
+
+      if (price > 0) {
+        await PaymentModel.create({
+          gymId,
+          memberId: member._id,
+          amount: price,
+          description: `${plan} (${duration} ${duration === 1 ? "month" : "months"})`,
+          paymentMethod: paymentMethod as PaymentMethod,
+          status: paymentStatus as PaymentStatus,
+          date: new Date(),
+        });
+      }
     } catch (error) {
+      await MembershipModel.deleteMany({ gymId, memberId: member._id });
       await MemberModel.deleteOne({ _id: member._id, gymId });
       throw error;
     }

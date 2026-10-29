@@ -4,6 +4,7 @@ import { verifyStaffPassword } from "gymos-admin-backend/lib/staff-password";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
 import {
   createStaffSessionToken,
+  getStaffCookieOptions,
   REMEMBERED_SESSION_DURATION_SECONDS,
   STAFF_SESSION_COOKIE,
   STAFF_SESSION_DURATION_SECONDS,
@@ -51,14 +52,15 @@ export async function POST(request: Request) {
       },
       duration,
     );
-    const response = NextResponse.json({ user: { name: user.fullName, email: user.email } });
-    response.cookies.set(STAFF_SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      ...(rememberMe ? { maxAge: duration } : {}),
+    const response = NextResponse.json({
+      user: { name: user.fullName, email: user.email },
+      sessionToken: token,
     });
+    response.cookies.set(
+      STAFF_SESSION_COOKIE,
+      token,
+      getStaffCookieOptions(request, rememberMe ? duration : undefined),
+    );
     return response;
   } catch (error) {
     console.error("Failed to sign in to GymOS:", error);

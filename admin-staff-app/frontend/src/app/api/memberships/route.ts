@@ -6,16 +6,12 @@ import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import MembershipPlanModel from "gymos-admin-backend/models/membership-plan";
 import PaymentModel from "gymos-admin-backend/models/payment";
+import { resolveActiveGymId } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
 
 const paymentStatuses = ["Paid", "Pending"] as const;
 type PaymentStatus = (typeof paymentStatuses)[number];
-
-function getActiveGymId() {
-  const gymId = process.env.GYMOS_GYM_ID;
-  return gymId && Types.ObjectId.isValid(gymId) ? new Types.ObjectId(gymId) : null;
-}
 
 function getUtcToday() {
   const today = new Date();
@@ -67,8 +63,8 @@ function serializePlan(plan: {
   };
 }
 
-export async function GET() {
-  const gymId = getActiveGymId();
+export async function GET(request: Request) {
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) {
     return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
   }
@@ -81,12 +77,29 @@ export async function GET() {
 
     const [plans, memberships] = await Promise.all([
       MembershipPlanModel.find({ gymId, active: true }).sort({ createdAt: 1 }),
-      MembershipModel.find({ gymId, status: "active", expiryDate: { $gte: getUtcToday() } })
+      MembershipModel.find({ gymId })
         .populate({ path: "memberId", model: MemberModel, select: "fullName status" })
         .sort({ expiryDate: 1 })
         .lean(),
     ]);
-    const memberIds = memberships.map((membership) => membership.memberId as unknown as Types.ObjectId);
+
+    // Keep latest membership per member so expired memberships can also be renewed from the table!
+    const latestByMember = new Map<string, (typeof memberships)[number]>();
+    for (const membership of [...memberships].sort(
+      (a, b) => new Date(b.expiryDate).getTime() - new Date(a.expiryDate).getTime(),
+    )) {
+      const member = membership.memberId as unknown as { _id: Types.ObjectId } | null;
+      if (!member) continue;
+      const memberId = member._id.toString();
+      if (!latestByMember.has(memberId)) {
+        latestByMember.set(memberId, membership);
+      }
+    }
+    const visibleMemberships = [...latestByMember.values()].sort(
+      (a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime(),
+    );
+
+    const memberIds = visibleMemberships.map((membership) => (membership.memberId as unknown as { _id: Types.ObjectId })._id);
     const payments = memberIds.length
       ? await PaymentModel.find({ gymId, memberId: { $in: memberIds } }).sort({ date: -1 })
       : [];
@@ -99,9 +112,9 @@ export async function GET() {
     }
 
     const planByName = new Map(plans.map((plan) => [plan.name, serializePlan(plan)]));
-    for (const membership of memberships) {
+    for (const membership of visibleMemberships) {
       const member = membership.memberId as unknown as { _id: Types.ObjectId; fullName: string; status: string } | null;
-      if (!member || member.status !== "active" || planByName.has(membership.planName)) continue;
+      if (!member || planByName.has(membership.planName)) continue;
       const durationMonths = durationInMonths(membership.startDate, membership.expiryDate);
       planByName.set(membership.planName, {
         id: `legacy-${membership.planName}`,
@@ -114,19 +127,21 @@ export async function GET() {
       });
     }
 
-    const subscriptions = memberships.flatMap((membership) => {
+    const subscriptions = visibleMemberships.flatMap((membership) => {
       const member = membership.memberId as unknown as { _id: Types.ObjectId; fullName: string; status: string } | null;
       const plan = planByName.get(membership.planName);
-      if (!member || member.status !== "active" || !plan) return [];
-      return [{
-        id: String(membership._id),
-        memberId: member._id.toString(),
-        memberName: member.fullName,
-        planId: plan.id,
-        startDate: membership.startDate.toISOString().slice(0, 10),
-        expirationDate: membership.expiryDate.toISOString().slice(0, 10),
-        paymentStatus: membership.paymentStatus ?? paymentStatusByMember.get(member._id.toString()) ?? "Pending",
-      }];
+      if (!member || !plan) return [];
+      return [
+        {
+          id: String(membership._id),
+          memberId: member._id.toString(),
+          memberName: member.fullName,
+          planId: plan.id,
+          startDate: membership.startDate.toISOString().slice(0, 10),
+          expirationDate: membership.expiryDate.toISOString().slice(0, 10),
+          paymentStatus: membership.paymentStatus ?? paymentStatusByMember.get(member._id.toString()) ?? "Pending",
+        },
+      ];
     });
 
     return NextResponse.json({ plans: [...planByName.values()], subscriptions });
@@ -137,7 +152,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const gymId = getActiveGymId();
+  const gymId = await resolveActiveGymId(request);
   if (!gymId) {
     return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
   }
@@ -164,11 +179,26 @@ export async function POST(request: Request) {
       const price = input.price;
       const durationMonths = input.durationMonths;
       const benefits = Array.isArray(input.benefits)
-        ? input.benefits.filter((benefit): benefit is string => typeof benefit === "string").map((benefit) => benefit.trim()).filter(Boolean)
+        ? input.benefits
+            .filter((benefit): benefit is string => typeof benefit === "string")
+            .map((benefit) => benefit.trim())
+            .filter(Boolean)
         : [];
-      if (!name || name.length > 60 || typeof price !== "number" || !Number.isFinite(price) || price < 0 ||
-        typeof durationMonths !== "number" || !Number.isInteger(durationMonths) || durationMonths < 1 || durationMonths > 36) {
-        return NextResponse.json({ error: "Provide a plan name, non-negative price, and duration from 1 to 36 months." }, { status: 400 });
+      if (
+        !name ||
+        name.length > 60 ||
+        typeof price !== "number" ||
+        !Number.isFinite(price) ||
+        price < 0 ||
+        typeof durationMonths !== "number" ||
+        !Number.isInteger(durationMonths) ||
+        durationMonths < 1 ||
+        durationMonths > 36
+      ) {
+        return NextResponse.json(
+          { error: "Provide a plan name, non-negative price, and duration from 1 to 36 months." },
+          { status: 400 },
+        );
       }
 
       const plan = await MembershipPlanModel.create({
@@ -201,26 +231,49 @@ export async function POST(request: Request) {
 
       const savedPlan = await MembershipPlanModel.findOne({ gymId, name: membership.planName, active: true });
       const durationMonths = savedPlan?.durationMonths ?? durationInMonths(membership.startDate, membership.expiryDate);
+      const renewalPrice = savedPlan?.price ?? membership.price;
       const expiryDate = addMonths(startDate, durationMonths);
       membership.startDate = startDate;
       membership.expiryDate = expiryDate;
+      membership.price = renewalPrice;
       membership.status = "active";
-      membership.paymentStatus = paymentStatus;
+      membership.paymentStatus = paymentStatus as PaymentStatus;
       await membership.save();
       await MemberModel.updateOne({ _id: membership.memberId, gymId }, { $set: { status: "active" } });
-      return NextResponse.json({ membership: { id: membership._id.toString(), expiryDate: expiryDate.toISOString().slice(0, 10) } });
+
+      if (renewalPrice > 0) {
+        await PaymentModel.create({
+          gymId,
+          memberId: membership.memberId,
+          amount: renewalPrice,
+          description: `${membership.planName} renewal`,
+          paymentMethod: "Cash",
+          status: paymentStatus as PaymentStatus,
+          date: new Date(),
+        });
+      }
+
+      return NextResponse.json({
+        membership: { id: membership._id.toString(), expiryDate: expiryDate.toISOString().slice(0, 10) },
+      });
     }
 
     if (input.action === "create") {
-      if (typeof input.memberId !== "string" || !Types.ObjectId.isValid(input.memberId) ||
-        typeof input.planId !== "string" || !Types.ObjectId.isValid(input.planId)) {
+      if (
+        typeof input.memberId !== "string" ||
+        !Types.ObjectId.isValid(input.memberId) ||
+        typeof input.planId !== "string" ||
+        !Types.ObjectId.isValid(input.planId)
+      ) {
         return NextResponse.json({ error: "Valid memberId and planId are required." }, { status: 400 });
       }
       const [member, plan] = await Promise.all([
         MemberModel.findOne({ _id: input.memberId, gymId }),
         MembershipPlanModel.findOne({ _id: input.planId, gymId, active: true }),
       ]);
-      if (!member || !plan) return NextResponse.json({ error: "Member or active plan was not found." }, { status: 404 });
+      if (!member || !plan) {
+        return NextResponse.json({ error: "Member or active plan was not found." }, { status: 404 });
+      }
 
       const expiryDate = addMonths(startDate, plan.durationMonths);
       const status = expiryDate < getUtcToday() ? "expired" : "active";
@@ -232,10 +285,24 @@ export async function POST(request: Request) {
         startDate,
         expiryDate,
         status,
-        paymentStatus,
+        paymentStatus: paymentStatus as PaymentStatus,
       });
       await MemberModel.updateOne({ _id: member._id, gymId }, { $set: { status } });
-      return NextResponse.json({ membership: { id: membership._id.toString(), expiryDate: expiryDate.toISOString().slice(0, 10) } }, { status: 201 });
+      if (plan.price > 0) {
+        await PaymentModel.create({
+          gymId,
+          memberId: member._id,
+          amount: plan.price,
+          description: plan.name,
+          paymentMethod: "Cash",
+          status: paymentStatus as PaymentStatus,
+          date: new Date(),
+        });
+      }
+      return NextResponse.json(
+        { membership: { id: membership._id.toString(), expiryDate: expiryDate.toISOString().slice(0, 10) } },
+        { status: 201 },
+      );
     }
 
     return NextResponse.json({ error: "action must be plan, renew, or create." }, { status: 400 });

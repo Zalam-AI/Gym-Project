@@ -1,12 +1,21 @@
 export const MEMBER_SESSION_COOKIE = "gymos_member_session";
 export const MEMBER_SESSION_DURATION_SECONDS = 7 * 24 * 60 * 60;
 
-export type MemberSession = {
+export type MemberAccountSession = {
   memberId: string;
   gymId: string;
   role: "member";
   exp: number;
 };
+
+export type TrainerAccountSession = {
+  trainerId: string;
+  gymId: string;
+  role: "trainer";
+  exp: number;
+};
+
+export type MemberSession = MemberAccountSession | TrainerAccountSession;
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -20,19 +29,22 @@ function decodeBase64Url(value: string): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(bytes.length);
-  new Uint8Array(buffer).set(bytes);
-  return buffer;
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
-async function getSigningKey(secret: string, usage: KeyUsage[]): Promise<CryptoKey> {
+async function getSigningKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    usage,
+    ["sign"],
   );
 }
 
@@ -44,43 +56,106 @@ function getSessionSecret() {
   return secret;
 }
 
-export async function createMemberSessionToken(memberId: string, gymId: string) {
-  const payload: MemberSession = {
-    memberId,
-    gymId,
-    role: "member",
-    exp: Math.floor(Date.now() / 1000) + MEMBER_SESSION_DURATION_SECONDS,
-  };
+async function signSessionPayload(payload: MemberSession): Promise<string> {
   const payloadPart = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const key = await getSigningKey(getSessionSecret(), ["sign"]);
+  const key = await getSigningKey(getSessionSecret());
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadPart));
   return `${payloadPart}.${encodeBase64Url(new Uint8Array(signature))}`;
 }
 
-export async function verifyMemberSessionToken(token: string | undefined): Promise<MemberSession | null> {
+export async function createMemberSessionToken(memberId: string, gymId: string) {
+  return signSessionPayload({
+    memberId,
+    gymId,
+    role: "member",
+    exp: Math.floor(Date.now() / 1000) + MEMBER_SESSION_DURATION_SECONDS,
+  });
+}
+
+export async function createTrainerSessionToken(trainerId: string, gymId: string) {
+  return signSessionPayload({
+    trainerId,
+    gymId,
+    role: "trainer",
+    exp: Math.floor(Date.now() / 1000) + MEMBER_SESSION_DURATION_SECONDS,
+  });
+}
+
+export const MEMBER_SESSION_HEADER = "x-gymos-session";
+
+export function getMemberTokenFromRequest(
+  request: Request,
+  cookieToken?: string,
+): string | undefined {
+  const customHeader = request.headers.get(MEMBER_SESSION_HEADER)?.trim();
+  if (customHeader) {
+    return customHeader;
+  }
+  try {
+    const queryToken = new URL(request.url).searchParams.get("_gst")?.trim();
+    if (queryToken) return queryToken;
+  } catch {
+    // Ignore malformed URL.
+  }
+  if (cookieToken) return cookieToken;
+  const rawCookie = request.headers.get("cookie");
+  if (rawCookie) {
+    for (const part of rawCookie.split(";")) {
+      const [key, ...rest] = part.trim().split("=");
+      if (key === MEMBER_SESSION_COOKIE) {
+        return decodeURIComponent(rest.join("="));
+      }
+    }
+  }
+  return undefined;
+}
+
+export async function verifyMemberSessionToken(
+  token: string | undefined,
+): Promise<MemberSession | null> {
   if (!token) return null;
   try {
     const [payloadPart, signaturePart, ...extra] = token.split(".");
     if (!payloadPart || !signaturePart || extra.length > 0) return null;
-    const key = await getSigningKey(getSessionSecret(), ["verify"]);
-    const valid = await crypto.subtle.verify(
+    const key = await getSigningKey(getSessionSecret());
+    const expectedSignature = await crypto.subtle.sign(
       "HMAC",
       key,
-      toArrayBuffer(decodeBase64Url(signaturePart)),
       new TextEncoder().encode(payloadPart),
     );
-    if (!valid) return null;
+    const expectedSignaturePart = encodeBase64Url(new Uint8Array(expectedSignature));
+    if (!constantTimeEqual(expectedSignaturePart, signaturePart)) return null;
+
     const payload: unknown = JSON.parse(new TextDecoder().decode(decodeBase64Url(payloadPart)));
     if (!payload || typeof payload !== "object") return null;
-    const session = payload as Partial<MemberSession>;
+    const session = payload as Record<string, unknown>;
     if (
-      typeof session.memberId !== "string" ||
       typeof session.gymId !== "string" ||
-      session.role !== "member" ||
       typeof session.exp !== "number" ||
       session.exp <= Math.floor(Date.now() / 1000)
-    ) return null;
-    return session as MemberSession;
+    ) {
+      return null;
+    }
+
+    if (session.role === "member" && typeof session.memberId === "string") {
+      return {
+        role: "member",
+        memberId: session.memberId,
+        gymId: session.gymId,
+        exp: session.exp,
+      };
+    }
+
+    if (session.role === "trainer" && typeof session.trainerId === "string") {
+      return {
+        role: "trainer",
+        trainerId: session.trainerId,
+        gymId: session.gymId,
+        exp: session.exp,
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }

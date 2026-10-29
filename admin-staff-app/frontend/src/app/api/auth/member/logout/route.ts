@@ -9,6 +9,6 @@ export async function OPTIONS(request: Request) {
 export async function POST(request: Request) {
   if (!isAllowedMemberOrigin(request)) return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   const response = memberApiResponse(request, { success: true });
-  clearMemberSessionCookie(response);
+  clearMemberSessionCookie(response, request);
   return response;
 }

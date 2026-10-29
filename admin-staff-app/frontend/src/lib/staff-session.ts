@@ -24,19 +24,22 @@ function decodeBase64Url(value: string): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const buffer = new ArrayBuffer(bytes.length);
-  new Uint8Array(buffer).set(bytes);
-  return buffer;
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
-async function getSigningKey(secret: string, usage: KeyUsage[]): Promise<CryptoKey> {
+async function getSigningKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    usage,
+    ["sign"],
   );
 }
 
@@ -48,6 +51,22 @@ function getSessionSecret(): string {
   return secret;
 }
 
+export function getStaffCookieOptions(request: Request, maxAge?: number) {
+  const isHttps =
+    Boolean(request.headers.get("x-forwarded-proto")?.includes("https")) ||
+    Boolean(request.headers.get("origin")?.startsWith("https://")) ||
+    request.url.startsWith("https://");
+
+  return {
+    httpOnly: true,
+    secure: isHttps,
+    sameSite: (isHttps ? "none" : "lax") as "none" | "lax",
+    ...(isHttps ? { partitioned: true } : {}),
+    path: "/",
+    ...(maxAge !== undefined ? { maxAge } : {}),
+  };
+}
+
 export async function createStaffSessionToken(
   session: Omit<StaffSession, "exp">,
   durationSeconds: number,
@@ -57,13 +76,42 @@ export async function createStaffSessionToken(
     exp: Math.floor(Date.now() / 1000) + durationSeconds,
   };
   const payloadPart = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const key = await getSigningKey(getSessionSecret(), ["sign"]);
+  const key = await getSigningKey(getSessionSecret());
   const signature = await crypto.subtle.sign(
     "HMAC",
     key,
     new TextEncoder().encode(payloadPart),
   );
   return `${payloadPart}.${encodeBase64Url(new Uint8Array(signature))}`;
+}
+
+export const STAFF_SESSION_HEADER = "x-gymos-session";
+
+export function getStaffTokenFromRequest(
+  request: Request,
+  cookieToken?: string,
+): string | undefined {
+  const customHeader = request.headers.get(STAFF_SESSION_HEADER)?.trim();
+  if (customHeader) {
+    return customHeader;
+  }
+  try {
+    const queryToken = new URL(request.url).searchParams.get("_gst")?.trim();
+    if (queryToken) return queryToken;
+  } catch {
+    // Ignore malformed URL.
+  }
+  if (cookieToken) return cookieToken;
+  const rawCookie = request.headers.get("cookie");
+  if (rawCookie) {
+    for (const part of rawCookie.split(";")) {
+      const [key, ...rest] = part.trim().split("=");
+      if (key === STAFF_SESSION_COOKIE) {
+        return decodeURIComponent(rest.join("="));
+      }
+    }
+  }
+  return undefined;
 }
 
 export async function verifyStaffSessionToken(
@@ -79,14 +127,14 @@ export async function verifyStaffSessionToken(
       return null;
     }
 
-    const key = await getSigningKey(getSessionSecret(), ["verify"]);
-    const valid = await crypto.subtle.verify(
+    const key = await getSigningKey(getSessionSecret());
+    const expectedSignature = await crypto.subtle.sign(
       "HMAC",
       key,
-      toArrayBuffer(decodeBase64Url(signaturePart)),
       new TextEncoder().encode(payloadPart),
     );
-    if (!valid) {
+    const expectedSignaturePart = encodeBase64Url(new Uint8Array(expectedSignature));
+    if (!constantTimeEqual(expectedSignaturePart, signaturePart)) {
       return null;
     }
 

@@ -6,6 +6,7 @@ import GymModel from "gymos-admin-backend/models/gym";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
 import {
   createStaffSessionToken,
+  getStaffCookieOptions,
   STAFF_SESSION_COOKIE,
   STAFF_SESSION_DURATION_SECONDS,
 } from "@/lib/staff-session";
@@ -103,13 +104,11 @@ export async function POST(request: Request) {
       STAFF_SESSION_DURATION_SECONDS,
     );
 
-    const response = NextResponse.json({ user: { name: user.fullName, email: user.email } }, { status: 201 });
-    response.cookies.set(STAFF_SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-    });
+    const response = NextResponse.json(
+      { user: { name: user.fullName, email: user.email }, sessionToken: token },
+      { status: 201 },
+    );
+    response.cookies.set(STAFF_SESSION_COOKIE, token, getStaffCookieOptions(request));
     return response;
   } catch (error) {
     if (

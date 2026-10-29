@@ -2,7 +2,7 @@ import { model, models, Schema, Types, type InferSchemaType } from "mongoose";
 
 const memberSchema = new Schema(
   {
-    gymId: { type: Schema.Types.ObjectId, ref: "Gym", required: true },
+    gymId: { type: Schema.Types.ObjectId, ref: "Gym", required: false },
     fullName: { type: String, required: true, trim: true },
     phone: { type: String, required: true, trim: true },
     email: { type: String, trim: true, lowercase: true },
@@ -19,6 +19,7 @@ const memberSchema = new Schema(
 );
 
 memberSchema.index({ gymId: 1, phone: 1 });
+memberSchema.index({ phone: 1 });
 memberSchema.index({ gymId: 1, fullName: 1 });
 
 export type Member = InferSchemaType<typeof memberSchema>;
