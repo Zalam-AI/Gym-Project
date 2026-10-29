@@ -1,0 +1,23 @@
+{
+  "name": "gymos-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "admin-staff-app/backend",
+    "admin-staff-app/frontend",
+    "mobile-app/frontend"
+  ],
+  "scripts": {
+    "dev:admin": "npm run dev --workspace gymos-admin-frontend",
+    "dev:member": "npm run dev --workspace gymos-member-frontend",
+    "build:admin": "npm run build --workspace gymos-admin-frontend",
+    "build:member": "npm run build --workspace gymos-member-frontend",
+    "lint:admin": "npm run lint --workspace gymos-admin-frontend",
+    "lint:member": "npm run lint --workspace gymos-member-frontend",
+    "typecheck:backend": "npm run typecheck --workspace gymos-admin-backend",
+    "seed:admin": "npm run seed --workspace gymos-admin-backend"
+  },
+  "overrides": {
+    "postcss": "^8.5.32"
+  }
+}
