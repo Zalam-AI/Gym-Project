@@ -64,7 +64,7 @@ export function getPlatformCookieOptions(request: Request, maxAge?: number) {
     httpOnly: true,
     secure: isHttps,
     sameSite: "lax" as const,
-    path: "/api/platform",
+    path: "/",
     ...(maxAge !== undefined ? { maxAge } : {}),
   };
 }
@@ -101,6 +101,14 @@ export function getPlatformTokenFromRequest(
   const sharedHeader = request.headers.get(FALLBACK_SESSION_HEADER)?.trim();
   if (sharedHeader) {
     return sharedHeader;
+  }
+  if (process.env.GYMOS_ALLOW_PREVIEW_ORIGINS === "1") {
+    try {
+      const queryToken = new URL(request.url).searchParams.get("_gpt")?.trim();
+      if (queryToken) return queryToken;
+    } catch {
+      // Ignore malformed URL.
+    }
   }
   if (cookieToken) return cookieToken;
   const rawCookie = request.headers.get("cookie");

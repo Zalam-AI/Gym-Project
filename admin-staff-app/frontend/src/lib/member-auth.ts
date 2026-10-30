@@ -99,9 +99,9 @@ export async function resolveMemberGym(gymCode: unknown) {
     return null;
   }
   if (Types.ObjectId.isValid(code)) {
-    return GymModel.findOne({ _id: code, status: { $ne: "suspended" } });
+    return GymModel.findOne({ _id: code, status: "active" });
   }
-  return GymModel.findOne({ slug: code.toLowerCase(), status: { $ne: "suspended" } });
+  return GymModel.findOne({ slug: code.toLowerCase(), status: "active" });
 }
 
 function getMemberCookieOptions(request: Request | undefined, maxAge: number) {

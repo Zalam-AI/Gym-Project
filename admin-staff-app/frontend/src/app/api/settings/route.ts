@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
-import { isValidTimezone } from "gymos-admin-backend/lib/gym-time";
+import { isValidTimezone, subdomainifyGymName } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import { generateStaffInviteCode } from "gymos-admin-backend/lib/trainer-code";
 import GymModel from "gymos-admin-backend/models/gym";
@@ -8,6 +8,19 @@ import StaffInviteModel from "gymos-admin-backend/models/staff-invite";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
 import { requireStaffContext } from "@/lib/gym-context";
 import { normalizePhone } from "@/lib/member-auth";
+import { isPreviewModeEnabled } from "@/lib/security";
+import {
+  createStaffSessionToken,
+  getStaffCookieOptions,
+  STAFF_SESSION_COOKIE,
+  STAFF_SESSION_DURATION_SECONDS,
+} from "@/lib/staff-session";
+import {
+  deriveGymInitials,
+  getConfiguredBaseDomain,
+  isValidCustomDomainHostname,
+  isValidGymSubdomainLabel,
+} from "@/lib/tenant-domain";
 
 export const runtime = "nodejs";
 
@@ -43,6 +56,8 @@ export async function GET(request: Request) {
         .lean(),
     ]);
 
+    const configuredBaseDomain = getConfiguredBaseDomain();
+
     return NextResponse.json({
       currentUser: {
         id: ctx.userId.toString(),
@@ -52,6 +67,8 @@ export async function GET(request: Request) {
       },
       gym: {
         ...ctx.gym,
+        baseDomain: configuredBaseDomain || "gymos.com",
+        baseDomainConfigured: Boolean(configuredBaseDomain),
         qrPayload: `GYMOS-GYM:${ctx.gym.id}`,
       },
       team: teamDocs.map((member) => ({
@@ -172,21 +189,157 @@ export async function POST(request: Request) {
         );
       }
 
-      const updated = await GymModel.findOneAndUpdate(
-        { _id: ctx.gymId },
-        { $set: { name, address, phone, capacity, timezone } },
-        { new: true, runValidators: true },
-      ).select("name slug address phone capacity timezone currency");
+      const setFields: Record<string, unknown> = {
+        name,
+        address,
+        phone,
+        capacity,
+        timezone,
+      };
+      const unsetFields: Record<string, 1> = {};
+
+      if ("subdomain" in input && typeof input.subdomain === "string") {
+        const subdomain = input.subdomain.trim().toLowerCase();
+        if (!subdomain || !isValidGymSubdomainLabel(subdomain)) {
+          return NextResponse.json(
+            {
+              error:
+                "Subdomain must be 2–48 lowercase letters, numbers, or hyphens and cannot use a reserved system word.",
+            },
+            { status: 400 },
+          );
+        }
+        const subdomainConflict = await GymModel.exists({
+          _id: { $ne: ctx.gymId },
+          $or: [{ subdomain }, { slug: subdomain }],
+        });
+        if (subdomainConflict) {
+          return NextResponse.json(
+            { error: "That gym subdomain is already taken by another workspace." },
+            { status: 409 },
+          );
+        }
+        setFields.subdomain = subdomain;
+      }
+
+      if ("customDomain" in input && typeof input.customDomain === "string") {
+        const customDomain = input.customDomain.trim().toLowerCase();
+        if (!customDomain) {
+          unsetFields.customDomain = 1;
+        } else {
+          if (!isValidCustomDomainHostname(customDomain)) {
+            return NextResponse.json(
+              {
+                error:
+                  "Enter a valid custom domain hostname (e.g. members.ironhouse.eg) without http:// or paths.",
+              },
+              { status: 400 },
+            );
+          }
+          const domainConflict = await GymModel.exists({
+            _id: { $ne: ctx.gymId },
+            customDomain,
+          });
+          if (domainConflict) {
+            return NextResponse.json(
+              { error: "That custom domain is already linked to another gym workspace." },
+              { status: 409 },
+            );
+          }
+          setFields.customDomain = customDomain;
+        }
+      }
+
+      if (input.branding && typeof input.branding === "object" && !Array.isArray(input.branding)) {
+        const rawBranding = input.branding as Record<string, unknown>;
+        const accentColor =
+          typeof rawBranding.accentColor === "string" ? rawBranding.accentColor.trim() : "";
+        const tagline =
+          typeof rawBranding.tagline === "string" ? rawBranding.tagline.trim() : "";
+        const logoText =
+          typeof rawBranding.logoText === "string"
+            ? rawBranding.logoText
+                .toUpperCase()
+                .replace(/[^A-Z0-9]/g, "")
+                .slice(0, 4)
+            : "";
+
+        if (accentColor && !/^#[0-9a-fA-F]{6}$/.test(accentColor)) {
+          return NextResponse.json(
+            { error: "Brand accent color must be a 6-digit hex color (e.g. #45b58b)." },
+            { status: 400 },
+          );
+        }
+        if (tagline.length > 120) {
+          return NextResponse.json(
+            { error: "Brand tagline must be 120 characters or fewer." },
+            { status: 400 },
+          );
+        }
+
+        setFields["branding.accentColor"] = accentColor || "#45b58b";
+        setFields["branding.tagline"] = tagline;
+        setFields["branding.logoText"] = logoText || deriveGymInitials(name);
+      }
+
+      const updateQuery: Record<string, unknown> = { $set: setFields };
+      if (Object.keys(unsetFields).length > 0) {
+        updateQuery.$unset = unsetFields;
+      }
+
+      const updated = await GymModel.findOneAndUpdate({ _id: ctx.gymId }, updateQuery, {
+        new: true,
+        runValidators: true,
+      }).select("name slug subdomain customDomain branding address phone capacity timezone currency");
 
       if (!updated) {
         return NextResponse.json({ error: "Gym workspace was not found." }, { status: 404 });
       }
 
-      return NextResponse.json({
+      const resolvedSubdomain =
+        typeof updated.subdomain === "string" && updated.subdomain.trim()
+          ? updated.subdomain.trim().toLowerCase()
+          : subdomainifyGymName(updated.name);
+      const resolvedCustomDomain =
+        typeof updated.customDomain === "string" && updated.customDomain.trim()
+          ? updated.customDomain.trim().toLowerCase()
+          : "";
+      const updatedBranding = updated.branding as
+        | { accentColor?: string; tagline?: string; logoText?: string }
+        | undefined;
+      const configuredBaseDomain = getConfiguredBaseDomain();
+
+      const refreshedToken = await createStaffSessionToken(
+        {
+          sub: ctx.userId.toString(),
+          name: ctx.userName,
+          email: ctx.userEmail,
+          gymId: ctx.gymId.toString(),
+          gymSlug: updated.slug,
+          gymSubdomain: resolvedSubdomain,
+          role: ctx.role,
+        },
+        STAFF_SESSION_DURATION_SECONDS,
+      );
+
+      const response = NextResponse.json({
         gym: {
           id: updated._id.toString(),
           name: updated.name,
           slug: updated.slug,
+          subdomain: resolvedSubdomain,
+          customDomain: resolvedCustomDomain,
+          branding: {
+            accentColor:
+              updatedBranding?.accentColor &&
+              /^#[0-9a-fA-F]{6}$/.test(updatedBranding.accentColor)
+                ? updatedBranding.accentColor
+                : "#45b58b",
+            tagline: updatedBranding?.tagline?.trim() ?? "",
+            logoText: deriveGymInitials(updated.name, updatedBranding?.logoText),
+          },
+          baseDomain: configuredBaseDomain || "gymos.com",
+          baseDomainConfigured: Boolean(configuredBaseDomain),
           address: updated.address,
           phone: updated.phone,
           capacity: updated.capacity,
@@ -194,7 +347,10 @@ export async function POST(request: Request) {
           currency: updated.currency,
           qrPayload: `GYMOS-GYM:${updated._id.toString()}`,
         },
+        ...(isPreviewModeEnabled() ? { sessionToken: refreshedToken } : {}),
       });
+      response.cookies.set(STAFF_SESSION_COOKIE, refreshedToken, getStaffCookieOptions(request));
+      return response;
     }
 
     if (action === "generate-staff-invite") {
@@ -307,6 +463,17 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "Unsupported settings action." }, { status: 400 });
   } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === 11000
+    ) {
+      return NextResponse.json(
+        { error: "That subdomain or custom domain is already registered to another gym." },
+        { status: 409 },
+      );
+    }
     console.error("Failed to update gym settings:", error);
     return NextResponse.json(
       { error: "Unable to save settings right now." },

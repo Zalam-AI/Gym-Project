@@ -5,7 +5,10 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "seed": "tsx scripts/seed.ts",
-    "test:isolation": "tsx --test tests/multi-tenant-isolation.test.ts"
+    "test:isolation": "tsx --test tests/multi-tenant-isolation.test.ts",
+    "test:subdomains": "tsx --test tests/tenant-subdomain-routing.test.ts",
+    "test:platform": "tsx --test tests/platform-admin-dashboard.test.ts",
+    "test:e2e": "tsx --test tests/post-deployment-e2e.test.ts"
   },
   "exports": {
     "./*": "./*.ts"

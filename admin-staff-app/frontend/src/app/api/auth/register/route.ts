@@ -4,12 +4,14 @@ import {
   DEFAULT_GYM_TIMEZONE,
   normalizeTimezone,
   slugifyGymName,
+  subdomainifyGymName,
 } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase, runInTransactionOrFallback } from "gymos-admin-backend/lib/mongodb";
 import { hashStaffPassword } from "gymos-admin-backend/lib/staff-password";
 import { normalizeStaffInviteCode } from "gymos-admin-backend/lib/trainer-code";
 import GymModel from "gymos-admin-backend/models/gym";
 import MembershipPlanModel from "gymos-admin-backend/models/membership-plan";
+import PlatformConfigModel from "gymos-admin-backend/models/platform-config";
 import StaffInviteModel from "gymos-admin-backend/models/staff-invite";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
 import { normalizePhone } from "@/lib/member-auth";
@@ -21,6 +23,8 @@ import {
   STAFF_SESSION_COOKIE,
   STAFF_SESSION_DURATION_SECONDS,
 } from "@/lib/staff-session";
+import { deriveGymInitials, isValidGymSubdomainLabel } from "@/lib/tenant-domain";
+import { resolveGymFromRequestHost } from "@/lib/tenant-resolver";
 
 export const runtime = "nodejs";
 
@@ -71,6 +75,23 @@ async function generateUniqueGymSlug(gymName: string): Promise<string> {
     if (!taken) return candidate;
   }
   return `${base.slice(0, 50)}-${Date.now().toString(36).slice(-6)}`;
+}
+
+async function generateUniqueGymSubdomain(gymName: string): Promise<string> {
+  const base = subdomainifyGymName(gymName);
+  const existingBase = await GymModel.exists({
+    $or: [{ subdomain: base }, { slug: base }],
+  });
+  if (!existingBase) return base;
+
+  for (let suffix = 2; suffix <= 50; suffix += 1) {
+    const candidate = `${base.slice(0, 44)}${suffix}`;
+    const taken = await GymModel.exists({
+      $or: [{ subdomain: candidate }, { slug: candidate }],
+    });
+    if (!taken) return candidate;
+  }
+  return `${base.slice(0, 40)}${Date.now().toString(36).slice(-6)}`;
 }
 
 export async function POST(request: Request) {
@@ -140,23 +161,83 @@ export async function POST(request: Request) {
   try {
     await connectToDatabase();
 
+    const tenant = await resolveGymFromRequestHost(request);
+    if (tenant.mode === "not-found") {
+      return NextResponse.json(
+        { error: "No gym workspace is registered at this URL." },
+        { status: 404 },
+      );
+    }
+    if (tenant.mode === "tenant" && tenant.gym.status !== "active") {
+      return NextResponse.json(
+        {
+          error:
+            tenant.gym.status === "pending"
+              ? "This gym workspace is awaiting platform administrator approval."
+              : "This gym workspace is currently suspended.",
+        },
+        { status: 403 },
+      );
+    }
+
     // ---------------------------------------------------------
     // MODE A: SELF-SERVICE SAAS GYM TENANT CREATION (OWNER)
     // ---------------------------------------------------------
     if (registrationType === "create-gym") {
+      if (tenant.mode === "tenant") {
+        return NextResponse.json(
+          {
+            error: `New gym workspaces cannot be created from ${tenant.gym.name}'s URL. Use the main GymOS portal to create a new gym.`,
+          },
+          { status: 403 },
+        );
+      }
+
+      const platformConfig = await PlatformConfigModel.findOne({ key: "global" }).lean<{
+        selfServiceRegistration?: "open" | "approval_required" | "closed";
+        defaultTrialDays?: number;
+        defaultGymCapacity?: number;
+        defaultTimezone?: string;
+        defaultCurrency?: string;
+      } | null>();
+
+      const selfServiceMode = platformConfig?.selfServiceRegistration ?? "open";
+      if (selfServiceMode === "closed") {
+        return NextResponse.json(
+          {
+            error:
+              "Self-service gym registration is currently closed by the platform administrator.",
+          },
+          { status: 403 },
+        );
+      }
+
       const gymAddress = typeof input.gymAddress === "string" ? input.gymAddress.trim() : "";
       const rawGymPhone = typeof input.gymPhone === "string" ? input.gymPhone.trim() : "";
       const gymPhone = normalizePhone(rawGymPhone) || rawGymPhone;
+      const requestedSubdomain =
+        typeof input.subdomain === "string" && input.subdomain.trim()
+          ? input.subdomain.trim().toLowerCase()
+          : "";
+      const fallbackCapacity = platformConfig?.defaultGymCapacity ?? DEFAULT_GYM_CAPACITY;
       const capacity =
         typeof input.capacity === "number" &&
         Number.isInteger(input.capacity) &&
         input.capacity >= 1 &&
         input.capacity <= 5000
           ? input.capacity
-          : DEFAULT_GYM_CAPACITY;
+          : fallbackCapacity;
+      const fallbackTimezone = platformConfig?.defaultTimezone || DEFAULT_GYM_TIMEZONE;
       const timezone = normalizeTimezone(
-        typeof input.timezone === "string" ? input.timezone : DEFAULT_GYM_TIMEZONE,
+        typeof input.timezone === "string" ? input.timezone : fallbackTimezone,
       );
+      const currency = platformConfig?.defaultCurrency || "EGP";
+      const trialDays =
+        typeof platformConfig?.defaultTrialDays === "number"
+          ? platformConfig.defaultTrialDays
+          : 14;
+      const trialEndDate = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
+      const initialGymStatus = selfServiceMode === "approval_required" ? "pending" : "active";
 
       if (!gymName || gymName.length < 2 || gymName.length > 100) {
         return NextResponse.json(
@@ -176,6 +257,15 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
+      if (requestedSubdomain && !isValidGymSubdomainLabel(requestedSubdomain)) {
+        return NextResponse.json(
+          {
+            error:
+              "Subdomain must be 2–48 lowercase letters, numbers, or hyphens and cannot use a reserved system word.",
+          },
+          { status: 400 },
+        );
+      }
 
       const emailTaken = await StaffUserModel.exists({ email });
       if (emailTaken) {
@@ -185,7 +275,21 @@ export async function POST(request: Request) {
         );
       }
 
+      if (requestedSubdomain) {
+        const subdomainTaken = await GymModel.exists({
+          $or: [{ subdomain: requestedSubdomain }, { slug: requestedSubdomain }],
+        });
+        if (subdomainTaken) {
+          return NextResponse.json(
+            { error: "That gym subdomain is already taken by another workspace." },
+            { status: 409 },
+          );
+        }
+      }
+
       const slug = await generateUniqueGymSlug(gymName);
+      const subdomain = requestedSubdomain || (await generateUniqueGymSubdomain(gymName));
+      const logoText = deriveGymInitials(gymName);
       const passwordHash = await hashStaffPassword(password);
 
       const { createdGym, createdOwner } = await runInTransactionOrFallback(async (tx) => {
@@ -195,12 +299,24 @@ export async function POST(request: Request) {
             {
               name: gymName,
               slug,
+              subdomain,
+              branding: {
+                accentColor: "#45b58b",
+                logoText,
+              },
+              platformSubscription: {
+                planTier: "trial",
+                billingStatus: "trialing",
+                billingCycle: "monthly",
+                renewalDate: trialEndDate,
+                notes: "Self-service trial onboarding",
+              },
               address: gymAddress,
               phone: gymPhone,
-              status: "active",
+              status: initialGymStatus,
               capacity,
               timezone,
-              currency: "EGP",
+              currency,
             },
           ],
           sessionOpt,
@@ -248,12 +364,37 @@ export async function POST(request: Request) {
         }
       });
 
+      if (initialGymStatus === "pending") {
+        return NextResponse.json(
+          {
+            pendingApproval: true,
+            message:
+              "Your gym workspace has been submitted and is awaiting platform administrator approval.",
+            user: {
+              name: createdOwner.fullName,
+              email: createdOwner.email,
+              role: "owner",
+            },
+            gym: {
+              id: createdGym._id.toString(),
+              name: createdGym.name,
+              slug: createdGym.slug,
+              subdomain: createdGym.subdomain ?? subdomain,
+              status: "pending",
+            },
+          },
+          { status: 202 },
+        );
+      }
+
       const token = await createStaffSessionToken(
         {
           sub: createdOwner._id.toString(),
           name: createdOwner.fullName,
           email: createdOwner.email,
           gymId: createdGym._id.toString(),
+          gymSlug: createdGym.slug,
+          gymSubdomain: createdGym.subdomain ?? subdomain,
           role: "owner",
         },
         STAFF_SESSION_DURATION_SECONDS,
@@ -270,6 +411,7 @@ export async function POST(request: Request) {
             id: createdGym._id.toString(),
             name: createdGym.name,
             slug: createdGym.slug,
+            subdomain: createdGym.subdomain ?? subdomain,
           },
           ...(isPreviewModeEnabled() ? { sessionToken: token } : {}),
         },
@@ -284,7 +426,12 @@ export async function POST(request: Request) {
     // ---------------------------------------------------------
     if (!rawInviteCode) {
       return NextResponse.json(
-        { error: "Enter the staff invitation code from your gym owner, or switch to Create a new gym." },
+        {
+          error:
+            tenant.mode === "tenant"
+              ? `Enter the staff invitation code issued by ${tenant.gym.name}.`
+              : "Enter the staff invitation code from your gym owner, or switch to Create a new gym.",
+        },
         { status: 400 },
       );
     }
@@ -315,6 +462,16 @@ export async function POST(request: Request) {
         ).catch(() => undefined);
       };
 
+      if (tenant.mode === "tenant" && claimedInvite.gymId.toString() !== tenant.gym._id.toString()) {
+        await rollbackInvite();
+        return NextResponse.json(
+          {
+            error: `Access denied: this staff invitation code does not belong to ${tenant.gym.name}.`,
+          },
+          { status: 403 },
+        );
+      }
+
       if (claimedInvite.presetEmail && claimedInvite.presetEmail !== email) {
         await rollbackInvite();
         return NextResponse.json(
@@ -325,8 +482,8 @@ export async function POST(request: Request) {
 
       const gym = await GymModel.findOne({
         _id: claimedInvite.gymId,
-        status: { $ne: "suspended" },
-      }).select("name slug");
+        status: "active",
+      }).select("name slug subdomain");
 
       if (!gym) {
         await rollbackInvite();
@@ -353,12 +510,19 @@ export async function POST(request: Request) {
           { $set: { claimedByUserId: user._id } },
         );
 
+        const subdomain =
+          typeof gym.subdomain === "string" && gym.subdomain.trim()
+            ? gym.subdomain.trim().toLowerCase()
+            : subdomainifyGymName(gym.name);
+
         const token = await createStaffSessionToken(
           {
             sub: user._id.toString(),
             name: user.fullName,
             email: user.email,
             gymId: user.gymId.toString(),
+            gymSlug: gym.slug,
+            gymSubdomain: subdomain,
             role,
           },
           STAFF_SESSION_DURATION_SECONDS,
@@ -367,7 +531,7 @@ export async function POST(request: Request) {
         const response = NextResponse.json(
           {
             user: { name: user.fullName, email: user.email, role },
-            gym: { id: gym._id.toString(), name: gym.name, slug: gym.slug },
+            gym: { id: gym._id.toString(), name: gym.name, slug: gym.slug, subdomain },
             ...(isPreviewModeEnabled() ? { sessionToken: token } : {}),
           },
           { status: 201 },

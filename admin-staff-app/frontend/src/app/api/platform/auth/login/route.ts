@@ -4,7 +4,13 @@ import {
   hashStaffPassword,
   verifyStaffPassword,
 } from "gymos-admin-backend/lib/staff-password";
-import PlatformAdminModel from "gymos-admin-backend/models/platform-admin";
+import PlatformAdminModel, {
+  PLATFORM_PERMISSIONS,
+  PLATFORM_ROLES,
+  type PlatformPermission,
+  type PlatformRole,
+} from "gymos-admin-backend/models/platform-admin";
+import { recordPlatformAudit } from "@/lib/platform-context";
 import {
   createPlatformSessionToken,
   getPlatformCookieOptions,
@@ -15,6 +21,9 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { isPreviewModeEnabled } from "@/lib/security";
 
 export const runtime = "nodejs";
+
+const VALID_PERMS = new Set<string>(PLATFORM_PERMISSIONS);
+const VALID_ROLES = new Set<string>(PLATFORM_ROLES);
 
 let dummyPlatformHashPromise: Promise<string> | null = null;
 function getDummyPlatformHash(): Promise<string> {
@@ -70,6 +79,36 @@ export async function POST(request: Request) {
       );
     }
 
+    admin.lastLoginAt = new Date();
+    await admin.save();
+
+    const role: PlatformRole =
+      typeof admin.role === "string" && VALID_ROLES.has(admin.role)
+        ? (admin.role as PlatformRole)
+        : "platform_admin";
+    const permissions = (admin.permissions ?? []).filter(
+      (item: unknown): item is PlatformPermission =>
+        typeof item === "string" && VALID_PERMS.has(item),
+    );
+
+    await recordPlatformAudit(
+      {
+        adminId: admin._id,
+        fullName: admin.fullName,
+        email: admin.email,
+        role,
+        permissions,
+      },
+      request,
+      {
+        action: "admin.login",
+        targetType: "session",
+        targetId: admin._id.toString(),
+        targetLabel: admin.email,
+        summary: `Platform administrator ${admin.fullName} (${role}) signed in.`,
+      },
+    );
+
     const token = await createPlatformSessionToken(
       {
         sub: admin._id.toString(),
@@ -84,7 +123,8 @@ export async function POST(request: Request) {
         id: admin._id.toString(),
         name: admin.fullName,
         email: admin.email,
-        permissions: admin.permissions ?? [],
+        role,
+        permissions,
       },
       ...(isPreviewModeEnabled() ? { sessionToken: token } : {}),
     });

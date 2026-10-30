@@ -19,6 +19,9 @@
     "typecheck:backend": "npm run typecheck --workspace gymos-admin-backend",
     "seed:admin": "npm run seed --workspace gymos-admin-backend",
     "test:isolation": "npm run test:isolation --workspace gymos-admin-backend",
+    "test:subdomains": "npm run test:subdomains --workspace gymos-admin-backend",
+    "test:platform": "npm run test:platform --workspace gymos-admin-backend",
+    "test:e2e": "npm run test:e2e --workspace gymos-admin-backend",
     "test:member": "npm run test --workspace gymos-member-frontend"
   },
   "engines": {

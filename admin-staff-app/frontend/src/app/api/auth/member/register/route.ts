@@ -175,7 +175,7 @@ export async function POST(request: Request) {
       const gymId = claimedInvite ? claimedInvite.gymId : targetTrainer!.gymId;
       const gym = await GymModel.findOne({
         _id: gymId,
-        status: { $ne: "suspended" },
+        status: "active",
       }).select("name slug");
       if (!gym) {
         await rollbackInvite();

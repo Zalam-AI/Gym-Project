@@ -61,6 +61,9 @@ export function AppShell({ activePage, children }: AppShellProps) {
   const [accountRole, setAccountRole] = useState<"owner" | "staff">("staff");
   const [gymName, setGymName] = useState("");
   const [gymSlug, setGymSlug] = useState("");
+  const [gymSubdomain, setGymSubdomain] = useState("");
+  const [gymLogoText, setGymLogoText] = useState("");
+  const [gymAccentColor, setGymAccentColor] = useState("#45b58b");
   const [logoutError, setLogoutError] = useState("");
   const [todayLabel, setTodayLabel] = useState("");
 
@@ -104,8 +107,11 @@ export function AppShell({ activePage, children }: AppShellProps) {
     const loadSession = () => {
       fetch("/api/auth/session", { cache: "no-store" })
         .then(async (response) => {
-          if (response.status === 401) {
+          if (response.status === 401 || response.status === 403) {
             clearStaffSessionToken();
+            if (response.status === 403) {
+              await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+            }
             router.replace("/login");
             return null;
           }
@@ -114,7 +120,12 @@ export function AppShell({ activePage, children }: AppShellProps) {
           }
           return (await response.json()) as {
             user: { name: string; email: string; role?: "owner" | "staff" };
-            gym?: { name: string; slug: string };
+            gym?: {
+              name: string;
+              slug: string;
+              subdomain?: string;
+              branding?: { accentColor?: string; logoText?: string; tagline?: string };
+            };
           };
         })
         .then((result) => {
@@ -125,6 +136,9 @@ export function AppShell({ activePage, children }: AppShellProps) {
             if (result.gym) {
               setGymName(result.gym.name);
               setGymSlug(result.gym.slug);
+              setGymSubdomain(result.gym.subdomain ?? "");
+              setGymLogoText(result.gym.branding?.logoText ?? "");
+              setGymAccentColor(result.gym.branding?.accentColor ?? "#45b58b");
             }
           }
         })
@@ -236,6 +250,9 @@ export function AppShell({ activePage, children }: AppShellProps) {
         onClose={() => setMenuOpen(false)}
         gymName={gymName}
         gymSlug={gymSlug}
+        gymSubdomain={gymSubdomain}
+        gymLogoText={gymLogoText}
+        gymAccentColor={gymAccentColor}
       />
 
       <div className="min-h-screen md:pl-[220px] lg:pl-[248px]">

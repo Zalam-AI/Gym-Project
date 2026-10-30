@@ -13,6 +13,8 @@ export type StaffSession = {
   name: string;
   email: string;
   gymId: string;
+  gymSlug?: string;
+  gymSubdomain?: string;
   role: StaffRole;
   exp: number;
 };
@@ -83,6 +85,8 @@ export async function createStaffSessionToken(
     name: string;
     email: string;
     gymId: string;
+    gymSlug?: string;
+    gymSubdomain?: string;
     role?: StaffRole;
   },
   durationSeconds: number,
@@ -93,6 +97,8 @@ export async function createStaffSessionToken(
     name: session.name,
     email: session.email,
     gymId: session.gymId,
+    ...(session.gymSlug ? { gymSlug: session.gymSlug } : {}),
+    ...(session.gymSubdomain ? { gymSubdomain: session.gymSubdomain } : {}),
     role: session.role === "owner" ? "owner" : "staff",
     exp: Math.floor(Date.now() / 1000) + durationSeconds,
   };
@@ -193,6 +199,10 @@ export async function verifyStaffSessionToken(
       name: raw.name,
       email: raw.email,
       gymId: raw.gymId,
+      ...(typeof raw.gymSlug === "string" && raw.gymSlug ? { gymSlug: raw.gymSlug } : {}),
+      ...(typeof raw.gymSubdomain === "string" && raw.gymSubdomain
+        ? { gymSubdomain: raw.gymSubdomain }
+        : {}),
       role: raw.role === "owner" ? "owner" : "staff",
       exp: raw.exp,
     };

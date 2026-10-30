@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { subdomainifyGymName } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import { hashStaffPassword, verifyStaffPassword } from "gymos-admin-backend/lib/staff-password";
 import GymModel from "gymos-admin-backend/models/gym";
@@ -12,6 +13,8 @@ import {
   STAFF_SESSION_COOKIE,
   STAFF_SESSION_DURATION_SECONDS,
 } from "@/lib/staff-session";
+import { deriveGymInitials } from "@/lib/tenant-domain";
+import { resolveGymFromRequestHost } from "@/lib/tenant-resolver";
 
 export const runtime = "nodejs";
 
@@ -53,12 +56,32 @@ export async function POST(request: Request) {
   const email = typeof input.email === "string" ? input.email.trim().toLowerCase() : "";
   const password = typeof input.password === "string" ? input.password : "";
   const rememberMe = input.rememberMe === true;
-  if (!email || !password) {
+  if (!email || !password || email.length > 254 || password.length > 256) {
     return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
   }
 
   try {
     await connectToDatabase();
+
+    const tenant = await resolveGymFromRequestHost(request);
+    if (tenant.mode === "not-found") {
+      return NextResponse.json(
+        { error: "No gym workspace is registered at this URL." },
+        { status: 404 },
+      );
+    }
+    if (tenant.mode === "tenant" && tenant.gym.status !== "active") {
+      return NextResponse.json(
+        {
+          error:
+            tenant.gym.status === "pending"
+              ? "This gym workspace is awaiting platform administrator approval."
+              : "This gym workspace is currently suspended.",
+        },
+        { status: 403 },
+      );
+    }
+
     const user = await StaffUserModel.findOne({ email }).select("+passwordHash");
     const targetHash = user ? user.passwordHash : await getDummyStaffHash();
     const validPassword = await verifyStaffPassword(password, targetHash);
@@ -74,18 +97,49 @@ export async function POST(request: Request) {
       );
     }
 
-    const gym = await GymModel.findById(user.gymId).select("name slug status");
+    const gym = await GymModel.findById(user.gymId).select(
+      "name slug subdomain customDomain branding status",
+    );
     if (!gym) {
       return NextResponse.json({ error: "Assigned gym workspace was not found." }, { status: 404 });
     }
-    if (gym.status === "suspended") {
+    if (gym.status !== "active") {
       return NextResponse.json(
-        { error: "This gym workspace is currently suspended." },
+        {
+          error:
+            gym.status === "pending"
+              ? "This gym workspace is awaiting platform administrator approval."
+              : "This gym workspace is currently suspended.",
+        },
         { status: 403 },
       );
     }
 
+    if (tenant.mode === "tenant" && gym._id.toString() !== tenant.gym._id.toString()) {
+      return NextResponse.json(
+        {
+          error: `Access denied: your account does not belong to ${tenant.gym.name}. Sign in from your own gym workspace URL.`,
+        },
+        { status: 403 },
+      );
+    }
+
+    user.lastLoginAt = new Date();
+    await user.save();
+
     const role = user.role === "owner" ? "owner" : "staff";
+    const subdomain =
+      typeof gym.subdomain === "string" && gym.subdomain.trim()
+        ? gym.subdomain.trim().toLowerCase()
+        : subdomainifyGymName(gym.name);
+    const customDomain =
+      typeof gym.customDomain === "string" && gym.customDomain.trim()
+        ? gym.customDomain.trim().toLowerCase()
+        : "";
+    const rawBranding = gym.branding as
+      | { accentColor?: string; tagline?: string; logoText?: string }
+      | undefined;
+
     const duration = rememberMe
       ? REMEMBERED_SESSION_DURATION_SECONDS
       : STAFF_SESSION_DURATION_SECONDS;
@@ -95,13 +149,29 @@ export async function POST(request: Request) {
         name: user.fullName,
         email: user.email,
         gymId: user.gymId.toString(),
+        gymSlug: gym.slug,
+        gymSubdomain: subdomain,
         role,
       },
       duration,
     );
     const response = NextResponse.json({
       user: { name: user.fullName, email: user.email, role },
-      gym: { id: gym._id.toString(), name: gym.name, slug: gym.slug },
+      gym: {
+        id: gym._id.toString(),
+        name: gym.name,
+        slug: gym.slug,
+        subdomain,
+        customDomain,
+        branding: {
+          accentColor:
+            rawBranding?.accentColor && /^#[0-9a-fA-F]{6}$/.test(rawBranding.accentColor)
+              ? rawBranding.accentColor
+              : "#45b58b",
+          tagline: rawBranding?.tagline?.trim() ?? "",
+          logoText: deriveGymInitials(gym.name, rawBranding?.logoText),
+        },
+      },
       ...(isPreviewModeEnabled() ? { sessionToken: token } : {}),
     });
     response.cookies.set(
