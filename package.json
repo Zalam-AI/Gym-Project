@@ -18,7 +18,8 @@
     "lint:member": "npm run lint --workspace gymos-member-frontend",
     "typecheck:backend": "npm run typecheck --workspace gymos-admin-backend",
     "seed:admin": "npm run seed --workspace gymos-admin-backend",
-    "test:isolation": "npm run test:isolation --workspace gymos-admin-backend"
+    "test:isolation": "npm run test:isolation --workspace gymos-admin-backend",
+    "test:member": "npm run test --workspace gymos-member-frontend"
   },
   "engines": {
     "node": ">=20.0.0"

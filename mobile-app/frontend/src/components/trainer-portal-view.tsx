@@ -19,7 +19,11 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { mobileFetch } from "@/lib/mobile-fetch";
+import {
+  clearMobileSessionToken,
+  mobileFetch,
+  readMobileJson,
+} from "@/lib/mobile-fetch";
 
 export type TrainerTab = "Pass" | "Clients" | "Schedule" | "Profile";
 
@@ -183,7 +187,15 @@ export function TrainerPortalView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = (await response.json()) as { error?: string };
+      if (response.status === 401) {
+        clearMobileSessionToken();
+        await onRefresh();
+        return false;
+      }
+      const data = await readMobileJson<{ error?: string }>(
+        response,
+        "Unable to save changes.",
+      );
       if (!response.ok) {
         throw new Error(data.error ?? "Unable to save changes.");
       }

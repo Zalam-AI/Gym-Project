@@ -21,3 +21,28 @@ services:
         sync: false
       - key: GYMOS_MEMBER_APP_ORIGINS
         sync: false
+
+  - type: web
+    name: gymos-mobile-app
+    runtime: static
+    buildCommand: npm ci --include=dev && npm run export:member
+    staticPublishPath: mobile-app/frontend/out
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(self), microphone=(), geolocation=()
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: NEXT_PUBLIC_API_BASE_URL
+        value: https://gymos-web-api.onrender.com

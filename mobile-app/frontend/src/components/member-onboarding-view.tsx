@@ -16,7 +16,11 @@ import {
   Smartphone,
   Sparkles,
 } from "lucide-react";
-import { mobileFetch } from "@/lib/mobile-fetch";
+import {
+  clearMobileSessionToken,
+  mobileFetch,
+  readMobileJson,
+} from "@/lib/mobile-fetch";
 
 export type GymPlanOption = {
   id: string;
@@ -136,7 +140,15 @@ export function MemberOnboardingView({
           paymentMethod,
         }),
       });
-      const data = (await response.json()) as { error?: string };
+      if (response.status === 401) {
+        clearMobileSessionToken();
+        await onRefreshPortal();
+        return;
+      }
+      const data = await readMobileJson<{ error?: string }>(
+        response,
+        "Unable to send your subscription request.",
+      );
       if (!response.ok) {
         throw new Error(data.error ?? "Unable to send your subscription request.");
       }
@@ -160,8 +172,17 @@ export function MemberOnboardingView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "cancel" }),
       });
+      if (response.status === 401) {
+        clearMobileSessionToken();
+        await onRefreshPortal();
+        return;
+      }
+      const data = await readMobileJson<{ error?: string }>(
+        response,
+        "Unable to cancel request.",
+      );
       if (!response.ok) {
-        throw new Error("Unable to cancel request.");
+        throw new Error(data.error ?? "Unable to cancel request.");
       }
       await onRefreshPortal();
     } catch (err) {

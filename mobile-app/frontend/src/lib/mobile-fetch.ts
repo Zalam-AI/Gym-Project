@@ -1,9 +1,20 @@
 const MOBILE_TOKEN_KEY = "gymos_mobile_session_v2";
 const SESSION_HEADER = "X-GymOS-Session";
+const DEFAULT_REQUEST_TIMEOUT_MS = 25_000;
 
-const configuredApiBaseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "")
-  .trim()
-  .replace(/\/+$/, "");
+export function normalizeApiBaseUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error(
+      `Invalid NEXT_PUBLIC_API_BASE_URL "${trimmed}": must start with https:// or http://.`,
+    );
+  }
+  // Gracefully tolerate values ending in `/api` so paths never double up as `/api/api/...`
+  return trimmed.replace(/\/api$/i, "");
+}
+
+const configuredApiBaseUrl = normalizeApiBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 let memoryMobileToken: string | null = null;
 
@@ -16,14 +27,14 @@ export function getMobileApiBaseUrl(): string {
   return configuredApiBaseUrl;
 }
 
-export function resolveMobileApiUrl(path: string): string {
+export function resolveMobileApiUrl(path: string, baseOverride?: string): string {
   if (/^https?:\/\//i.test(path)) {
     return path;
   }
+  const base =
+    baseOverride !== undefined ? normalizeApiBaseUrl(baseOverride) : configuredApiBaseUrl;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return configuredApiBaseUrl
-    ? `${configuredApiBaseUrl}${normalizedPath}`
-    : normalizedPath;
+  return base ? `${base}${normalizedPath}` : normalizedPath;
 }
 
 export function safeLocalGet(key: string): string | null {
@@ -110,7 +121,10 @@ function isPublicAuthPath(url: string): boolean {
   );
 }
 
-export function mobileFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function mobileFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
   const headers = new Headers(init?.headers);
   const rawUrl =
     typeof input === "string"
@@ -135,9 +149,82 @@ export function mobileFetch(input: RequestInfo | URL, init?: RequestInit): Promi
   const finalTarget: RequestInfo | URL =
     typeof input === "string" || input instanceof URL ? targetUrl : input;
 
-  return fetch(finalTarget, {
-    ...init,
-    credentials: init?.credentials ?? "include",
-    headers,
-  });
+  const controller = !init?.signal ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), DEFAULT_REQUEST_TIMEOUT_MS)
+    : null;
+
+  try {
+    return await fetch(finalTarget, {
+      ...init,
+      credentials: init?.credentials ?? "include",
+      headers,
+      signal: init?.signal ?? controller?.signal,
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "name" in error && error.name === "AbortError") {
+      throw new Error("Connection to GymOS timed out. Please try again.");
+    }
+    throw new Error(
+      "Unable to reach the GymOS server. Check your internet connection and try again.",
+    );
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+function statusFallbackMessage(status: number, fallbackMessage: string): string {
+  if (status === 401) {
+    return "Your session has expired. Please sign in again.";
+  }
+  if (status === 403) {
+    return "Access denied. Verify your account status or app configuration.";
+  }
+  if (status === 429) {
+    return "Too many attempts. Please wait a moment and try again.";
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return "GymOS server is waking up or temporarily unavailable. Please try again in a few seconds.";
+  }
+  return fallbackMessage;
+}
+
+/**
+ * Safely parses JSON from a mobile API response without crashing on HTML gateway/proxy
+ * pages (e.g., Render 502/503 cold-start responses) or empty bodies.
+ */
+export async function readMobileJson<T extends Record<string, unknown>>(
+  response: Response,
+  fallbackError = "Unexpected server response. Please try again.",
+): Promise<T> {
+  let rawText = "";
+  try {
+    rawText = await response.text();
+  } catch {
+    return { error: statusFallbackMessage(response.status, fallbackError) } as unknown as T;
+  }
+
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return (
+      response.ok
+        ? {}
+        : { error: statusFallbackMessage(response.status, fallbackError) }
+    ) as unknown as T;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as T;
+    }
+  } catch {
+    // Non-JSON response (e.g. HTML 502/503 gateway page during cold start).
+  }
+
+  return {
+    error: statusFallbackMessage(response.status, fallbackError),
+  } as unknown as T;
 }

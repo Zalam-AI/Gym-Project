@@ -39,7 +39,9 @@ import {
 } from "@/components/member-onboarding-view";
 import {
   clearMobileSessionToken,
+  getMobileSessionToken,
   mobileFetch,
+  readMobileJson,
   safeLocalGet,
   safeLocalRemove,
   safeLocalSet,
@@ -92,6 +94,7 @@ type UpcomingMemberSession = {
 type PortalResponse = {
   role?: "member" | "trainer";
   enrolledInGym?: boolean;
+  sessionToken?: string;
   pendingRequest?: PendingSubscriptionInfo | null;
   member?: MemberProfile;
   trainer?: {
@@ -221,6 +224,7 @@ function MobileAuthScreen({
   const [password, setPassword] = useState("");
 
   const [verifiedInviteGym, setVerifiedInviteGym] = useState("");
+  const [inviteCodeError, setInviteCodeError] = useState("");
   const [isCheckingCode, setIsCheckingCode] = useState(false);
 
   const [error, setError] = useState("");
@@ -230,11 +234,13 @@ function MobileAuthScreen({
   useEffect(() => {
     if (mode !== "register" || registerRole !== "trainer") {
       setVerifiedInviteGym("");
+      setInviteCodeError("");
       return;
     }
     const trimmed = trainerCode.trim().toUpperCase();
-    if (trimmed.length < 8) {
+    if (trimmed.length < 6) {
       setVerifiedInviteGym("");
+      setInviteCodeError("");
       return;
     }
 
@@ -246,16 +252,18 @@ function MobileAuthScreen({
           `/api/auth/trainer-code?code=${encodeURIComponent(trimmed)}`,
           { cache: "no-store" },
         );
-        const body = (await res.json()) as {
+        const body = await readMobileJson<{
           valid?: boolean;
+          error?: string;
           gymName?: string;
           presetName?: string;
           presetSpecialty?: string;
           presetPhone?: string;
-        };
+        }>(res, "Unable to verify invite code right now.");
         if (cancelled) return;
         if (res.ok && body.valid) {
           setVerifiedInviteGym(body.gymName ?? "Verified Gym");
+          setInviteCodeError("");
           if (body.presetName) {
             setFullName((curr) => curr || body.presetName!);
           }
@@ -267,9 +275,17 @@ function MobileAuthScreen({
           }
         } else {
           setVerifiedInviteGym("");
+          setInviteCodeError(
+            body.error ?? "Invalid or already-used trainer invite code.",
+          );
         }
-      } catch {
-        if (!cancelled) setVerifiedInviteGym("");
+      } catch (err) {
+        if (!cancelled) {
+          setVerifiedInviteGym("");
+          setInviteCodeError(
+            err instanceof Error ? err.message : "Unable to verify invite code.",
+          );
+        }
       } finally {
         if (!cancelled) setIsCheckingCode(false);
       }
@@ -321,10 +337,10 @@ function MobileAuthScreen({
           ),
         },
       );
-      const data = (await response.json()) as {
+      const data = await readMobileJson<{
         error?: string;
         sessionToken?: string;
-      };
+      }>(response, "Unable to authenticate.");
       if (!response.ok) throw new Error(data.error ?? "Unable to authenticate.");
       if (data.sessionToken) {
         setMobileSessionToken(data.sessionToken);
@@ -464,6 +480,14 @@ function MobileAuthScreen({
                     <p className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-[#eaf6f0] px-2 py-1 text-[10px] font-semibold text-[#278968]">
                       <CheckCircle2 size={12} aria-hidden="true" />
                       Verified code · {verifiedInviteGym}
+                    </p>
+                  )}
+                  {!verifiedInviteGym && !isCheckingCode && inviteCodeError && (
+                    <p
+                      role="alert"
+                      className="mt-1.5 rounded-md bg-[#fff1ef] px-2 py-1 text-[10px] font-medium text-[#a9433b]"
+                    >
+                      {inviteCodeError}
                     </p>
                   )}
                 </div>
@@ -731,7 +755,10 @@ export function MemberApp() {
       setAuthStatus("unauthenticated");
       return false;
     }
-    const data = (await response.json()) as TrainerPortalResponse;
+    const data = await readMobileJson<TrainerPortalResponse>(
+      response,
+      "Unable to load your trainer profile.",
+    );
     if (!response.ok || !data.trainer) {
       throw new Error(data.error ?? "Unable to load your trainer profile.");
     }
@@ -764,13 +791,20 @@ export function MemberApp() {
         return false;
       }
 
-      const data = (await response.json()) as PortalResponse;
+      const data = await readMobileJson<PortalResponse>(
+        response,
+        "Unable to load your member profile.",
+      );
       if (data.role === "trainer") {
         return await loadTrainerPortal();
       }
 
       if (!response.ok || !data.member) {
         throw new Error(data.error ?? "Unable to load your member profile.");
+      }
+
+      if (data.sessionToken) {
+        setMobileSessionToken(data.sessionToken);
       }
 
       setAccountRole("member");
@@ -791,10 +825,13 @@ export function MemberApp() {
       setAuthStatus("authenticated");
       return true;
     } catch (error) {
-      setDataError(
-        error instanceof Error ? error.message : "Unable to load your profile.",
-      );
-      setAuthStatus((prev) => (prev === "checking" ? "unauthenticated" : prev));
+      const message =
+        error instanceof Error ? error.message : "Unable to load your profile.";
+      setDataError(message);
+      setAuthStatus((prev) => {
+        if (prev !== "checking") return prev;
+        return getMobileSessionToken() ? "checking" : "unauthenticated";
+      });
       return false;
     }
   }, [loadTrainerPortal]);
@@ -882,7 +919,13 @@ export function MemberApp() {
             `/api/member-subscriptions?qr=${encodeURIComponent(cleanedPayload)}`,
             { cache: "no-store" },
           );
-          const data = (await response.json()) as {
+          if (response.status === 401) {
+            clearMobileSessionToken();
+            setIsScannerOpen(false);
+            setAuthStatus("unauthenticated");
+            return;
+          }
+          const data = await readMobileJson<{
             error?: string;
             gym?: {
               id: string;
@@ -893,7 +936,10 @@ export function MemberApp() {
             };
             plans?: GymPlanOption[];
             paymentMethods?: Array<"Cash" | "Card" | "Instapay">;
-          };
+          }>(
+            response,
+            "Invalid QR code. Scan the QR code displayed at your gym's reception desk.",
+          );
           if (!response.ok || !data.gym) {
             throw new Error(
               data.error ?? "Invalid QR code. Scan the QR code displayed at your gym's reception desk.",
@@ -945,10 +991,16 @@ export function MemberApp() {
                 },
           ),
         });
-        const data = (await response.json()) as {
+        if (response.status === 401) {
+          clearMobileSessionToken();
+          setIsScannerOpen(false);
+          setAuthStatus("unauthenticated");
+          return;
+        }
+        const data = await readMobileJson<{
           error?: string;
           checkIn?: { id: string; time: string; checkInTime: string; source: string };
-        };
+        }>(response, "Check-in could not be completed.");
         if (!response.ok || !data.checkIn) {
           throw new Error(data.error ?? "Check-in could not be completed.");
         }
@@ -1111,10 +1163,38 @@ export function MemberApp() {
       <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
         <section
           aria-label="Loading GymOS mobile app"
-          className="flex h-[100dvh] w-full max-w-[430px] flex-col items-center justify-center gap-3 bg-[#f7f8fa] shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
+          className="flex h-[100dvh] w-full max-w-[430px] flex-col items-center justify-center gap-3 bg-[#f7f8fa] px-6 text-center shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
         >
-          <LoaderCircle size={28} className="animate-spin text-[#278968]" aria-hidden="true" />
-          <p className="text-[12px] font-medium text-[#687585]">Loading your GymOS pass…</p>
+          {dataError ? (
+            <div className="w-full max-w-[310px] space-y-3 rounded-2xl border border-[#e9edf1] bg-white p-5">
+              <p className="text-[13px] font-semibold text-[#243242]">
+                Connection interrupted
+              </p>
+              <p role="alert" className="text-[11px] leading-4 text-[#687585]">
+                {dataError}
+              </p>
+              <button
+                type="button"
+                onClick={() => void loadMobilePortal()}
+                className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-[#278968] px-4 text-[11px] font-semibold text-white hover:bg-[#207858]"
+              >
+                <RotateCcw size={13} aria-hidden="true" />
+                Retry connection
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleLogout()}
+                className="inline-flex min-h-9 w-full items-center justify-center rounded-xl border border-[#e3e8ec] bg-white px-4 text-[11px] font-medium text-[#687585] hover:bg-slate-50"
+              >
+                Back to sign in
+              </button>
+            </div>
+          ) : (
+            <>
+              <LoaderCircle size={28} className="animate-spin text-[#278968]" aria-hidden="true" />
+              <p className="text-[12px] font-medium text-[#687585]">Loading your GymOS pass…</p>
+            </>
+          )}
         </section>
       </main>
     );
