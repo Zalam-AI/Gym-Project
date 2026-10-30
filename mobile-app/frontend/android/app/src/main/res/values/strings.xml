@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GymOS</string>
+    <string name="title_activity_main">GymOS</string>
+    <string name="package_name">com.gymos.mobile</string>
+    <string name="custom_url_scheme">com.gymos.mobile</string>
+</resources>

@@ -12,11 +12,17 @@ import TrainerModel from "gymos-admin-backend/models/trainer";
 import TrainingSessionModel from "gymos-admin-backend/models/training-session";
 import WorkoutPlanModel from "gymos-admin-backend/models/workout-plan";
 import {
+  createMemberSessionToken,
   getMemberTokenFromRequest,
   MEMBER_SESSION_COOKIE,
   verifyMemberSessionToken,
 } from "@/lib/member-session";
-import { isAllowedMemberOrigin, memberApiOptions, memberApiResponse } from "@/lib/member-auth";
+import {
+  isAllowedMemberOrigin,
+  memberApiOptions,
+  memberApiResponse,
+  setMemberSessionCookie,
+} from "@/lib/member-auth";
 import {
   getPlatformTokenFromRequest,
   PLATFORM_SESSION_COOKIE,
@@ -254,9 +260,14 @@ export async function GET(request: NextRequest) {
           ? "Active"
           : "Unpaid";
 
-    return memberApiResponse(request, {
+    const upgradedSessionToken = !session.gymId
+      ? await createMemberSessionToken(member._id.toString(), memberGymId.toString())
+      : undefined;
+
+    const response = memberApiResponse(request, {
       role: "member",
       enrolledInGym: true,
+      ...(upgradedSessionToken ? { sessionToken: upgradedSessionToken } : {}),
       pendingRequest,
       member: {
         id: member._id.toString(),
@@ -337,6 +348,10 @@ export async function GET(request: NextRequest) {
         source: visit.source ?? "Front desk",
       })),
     });
+    if (upgradedSessionToken) {
+      setMemberSessionCookie(response, upgradedSessionToken, request);
+    }
+    return response;
   } catch (error) {
     console.error("Failed to fetch member portal data:", error);
     return memberApiResponse(request, { error: "Unable to fetch member data at this time." }, 503);
