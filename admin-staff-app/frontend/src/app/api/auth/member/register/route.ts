@@ -19,6 +19,7 @@ import {
   resolveMemberGym,
   setMemberSessionCookie,
 } from "@/lib/member-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -38,6 +39,22 @@ export async function POST(request: Request) {
   if (!isAllowedMemberOrigin(request)) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
+
+  const rate = checkRateLimit(request, {
+    namespace: "mobile-register",
+    limit: 15,
+    windowMs: 10 * 60_000,
+  });
+  if (!rate.allowed) {
+    const res = memberApiResponse(
+      request,
+      { error: "Too many registration attempts. Please wait a few minutes and try again." },
+      429,
+    );
+    res.headers.set("Retry-After", String(rate.retryAfterSeconds));
+    return res;
+  }
+
   const parsed = await parseMemberAuthBody(request);
   if (!parsed.input) {
     return memberApiResponse(request, { error: parsed.error }, 400);
@@ -60,7 +77,12 @@ export async function POST(request: Request) {
       400,
     );
   }
-  if (phone.length < 8 || phone.length > 20 || phone.slice(1).includes("+") || !/^\+?\d+$/.test(phone)) {
+  if (
+    phone.length < 8 ||
+    phone.length > 20 ||
+    phone.slice(1).includes("+") ||
+    !/^\+?\d+$/.test(phone)
+  ) {
     return memberApiResponse(request, { error: "Enter a valid phone number." }, 400);
   }
   if (email && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)) {
@@ -85,7 +107,7 @@ export async function POST(request: Request) {
     await connectToDatabase();
 
     // ---------------------------------------------------------
-    // TRAINER REGISTRATION (Requires Admin-Generated Invite Code)
+    // TRAINER REGISTRATION (Atomic Invite Code Claim)
     // ---------------------------------------------------------
     if (accountType === "trainer") {
       const rawTrainerCode = typeof input.trainerCode === "string" ? input.trainerCode : "";
@@ -93,40 +115,56 @@ export async function POST(request: Request) {
       if (!trainerCode) {
         return memberApiResponse(
           request,
-          { error: "A trainer invite code from the gym admin is required to register as a trainer." },
+          {
+            error:
+              "A trainer invite code from the gym admin is required to register as a trainer.",
+          },
           400,
         );
       }
 
-      const invite = await TrainerInviteModel.findOne({ code: trainerCode });
-      let targetTrainer = invite?.trainerId
-        ? await TrainerModel.findById(invite.trainerId).select("+passwordHash")
-        : await TrainerModel.findOne({ inviteCode: trainerCode }).select("+passwordHash");
+      const now = new Date();
+      const claimedInvite = await TrainerInviteModel.findOneAndUpdate(
+        {
+          code: trainerCode,
+          status: "unused",
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: null },
+            { expiresAt: { $gt: now } },
+          ],
+        },
+        { $set: { status: "claimed", claimedAt: now } },
+        { new: true },
+      );
 
-      if (invite) {
-        if (invite.status !== "unused") {
-          return memberApiResponse(
-            request,
-            { error: "This trainer invite code has already been used or revoked." },
-            400,
-          );
-        }
-        if (invite.expiresAt && invite.expiresAt < new Date()) {
-          return memberApiResponse(
-            request,
-            { error: "This trainer invite code has expired. Ask your gym admin for a new code." },
-            400,
-          );
-        }
-      } else if (!targetTrainer) {
+      const rollbackInvite = async () => {
+        if (!claimedInvite) return;
+        await TrainerInviteModel.updateOne(
+          { _id: claimedInvite._id },
+          { $set: { status: "unused" }, $unset: { claimedAt: 1, claimedByTrainerId: 1 } },
+        ).catch(() => undefined);
+      };
+
+      let targetTrainer = claimedInvite?.trainerId
+        ? await TrainerModel.findById(claimedInvite.trainerId).select("+passwordHash")
+        : !claimedInvite
+          ? await TrainerModel.findOne({ inviteCode: trainerCode }).select("+passwordHash")
+          : null;
+
+      if (!claimedInvite && !targetTrainer) {
         return memberApiResponse(
           request,
-          { error: "Invalid trainer invite code. Ask your gym admin to generate one on the website." },
+          {
+            error:
+              "Invalid, expired, or already-used trainer invite code. Ask your gym admin to generate a new code.",
+          },
           404,
         );
       }
 
       if (targetTrainer?.passwordHash) {
+        await rollbackInvite();
         return memberApiResponse(
           request,
           { error: "This trainer profile is already activated. Please sign in." },
@@ -134,20 +172,29 @@ export async function POST(request: Request) {
         );
       }
 
-      const gymId = invite ? invite.gymId : targetTrainer!.gymId;
-      const gym = await GymModel.findById(gymId).select("name slug");
+      const gymId = claimedInvite ? claimedInvite.gymId : targetTrainer!.gymId;
+      const gym = await GymModel.findOne({
+        _id: gymId,
+        status: { $ne: "suspended" },
+      }).select("name slug");
       if (!gym) {
-        return memberApiResponse(request, { error: "Gym for this invite code was not found." }, 404);
+        await rollbackInvite();
+        return memberApiResponse(
+          request,
+          { error: "Gym workspace for this invite code was not found or is unavailable." },
+          404,
+        );
       }
 
       const rawSpecialty = typeof input.specialty === "string" ? input.specialty.trim() : "";
       const specialty =
         rawSpecialty ||
         targetTrainer?.specialty ||
-        invite?.presetSpecialty ||
+        claimedInvite?.presetSpecialty ||
         "Personal Training & Fitness";
 
       if (specialty.length > 100) {
+        await rollbackInvite();
         return memberApiResponse(
           request,
           { error: "Specialty must be 100 characters or fewer." },
@@ -155,7 +202,6 @@ export async function POST(request: Request) {
         );
       }
 
-      // Check for duplicate active trainer login in the same gym
       const duplicateConditions: Array<Record<string, unknown>> = [
         { phone: { $in: phoneCandidates.length ? phoneCandidates : [phone] } },
       ];
@@ -168,6 +214,7 @@ export async function POST(request: Request) {
       }).select("+passwordHash");
 
       if (conflictingTrainer?.passwordHash) {
+        await rollbackInvite();
         return memberApiResponse(
           request,
           { error: "A trainer account already exists with this phone or email. Please sign in." },
@@ -175,84 +222,88 @@ export async function POST(request: Request) {
         );
       }
 
-      // If no explicit trainerId was linked on the invite, check if an unclaimed directory trainer matches by phone/email
       if (!targetTrainer && conflictingTrainer && !conflictingTrainer.passwordHash) {
         targetTrainer = conflictingTrainer;
       }
 
-      const passwordHash = await bcrypt.hash(password, 12);
-      let trainerDoc;
+      try {
+        const passwordHash = await bcrypt.hash(password, 12);
+        let trainerDoc;
 
-      if (targetTrainer) {
-        targetTrainer.name = fullName;
-        targetTrainer.phone = phone;
-        targetTrainer.specialty = specialty;
-        if (email) targetTrainer.email = email;
-        targetTrainer.passwordHash = passwordHash;
-        targetTrainer.status = "active";
-        targetTrainer.inviteCode = undefined;
-        if (!targetTrainer.availability || targetTrainer.availability.length === 0) {
-          targetTrainer.set("availability", [...defaultTrainerAvailability]);
+        if (targetTrainer) {
+          targetTrainer.name = fullName;
+          targetTrainer.phone = phone;
+          targetTrainer.specialty = specialty;
+          if (email) targetTrainer.email = email;
+          targetTrainer.passwordHash = passwordHash;
+          targetTrainer.status = "active";
+          targetTrainer.inviteCode = undefined;
+          if (!targetTrainer.availability || targetTrainer.availability.length === 0) {
+            targetTrainer.set("availability", [...defaultTrainerAvailability]);
+          }
+          await targetTrainer.save();
+          trainerDoc = targetTrainer;
+        } else {
+          trainerDoc = await TrainerModel.create({
+            gymId,
+            name: fullName,
+            specialty,
+            phone,
+            ...(email ? { email } : {}),
+            passwordHash,
+            status: "active",
+            availability: [...defaultTrainerAvailability],
+            assignedMemberIds: [],
+          });
         }
-        await targetTrainer.save();
-        trainerDoc = targetTrainer;
-      } else {
-        trainerDoc = await TrainerModel.create({
-          gymId,
-          name: fullName,
-          specialty,
-          phone,
-          ...(email ? { email } : {}),
-          passwordHash,
-          status: "active",
-          availability: [...defaultTrainerAvailability],
-          assignedMemberIds: [],
-        });
-      }
 
-      if (invite) {
-        invite.status = "claimed";
-        invite.claimedByTrainerId = trainerDoc._id;
-        invite.claimedAt = new Date();
-        await invite.save();
-      } else {
-        await TrainerInviteModel.updateMany(
-          { gymId, code: trainerCode, status: "unused" },
+        if (claimedInvite) {
+          await TrainerInviteModel.updateOne(
+            { _id: claimedInvite._id },
+            { $set: { claimedByTrainerId: trainerDoc._id } },
+          );
+        } else {
+          await TrainerInviteModel.updateMany(
+            { gymId, code: trainerCode, status: "unused" },
+            {
+              $set: {
+                status: "claimed",
+                claimedByTrainerId: trainerDoc._id,
+                claimedAt: now,
+              },
+            },
+          );
+        }
+
+        const token = await createTrainerSessionToken(
+          trainerDoc._id.toString(),
+          gym._id.toString(),
+        );
+        const response = memberApiResponse(
+          request,
           {
-            $set: {
-              status: "claimed",
-              claimedByTrainerId: trainerDoc._id,
-              claimedAt: new Date(),
+            role: "trainer",
+            sessionToken: token,
+            trainer: {
+              id: trainerDoc._id.toString(),
+              name: trainerDoc.name,
+              specialty: trainerDoc.specialty,
+              email: trainerDoc.email,
+              gymName: gym.name,
             },
           },
+          201,
         );
+        setMemberSessionCookie(response, token, request);
+        return response;
+      } catch (err) {
+        await rollbackInvite();
+        throw err;
       }
-
-      const token = await createTrainerSessionToken(
-        trainerDoc._id.toString(),
-        gym._id.toString(),
-      );
-      const response = memberApiResponse(
-        request,
-        {
-          role: "trainer",
-          sessionToken: token,
-          trainer: {
-            id: trainerDoc._id.toString(),
-            name: trainerDoc.name,
-            specialty: trainerDoc.specialty,
-            email: trainerDoc.email,
-            gymName: gym.name,
-          },
-        },
-        201,
-      );
-      setMemberSessionCookie(response, token, request);
-      return response;
     }
 
     // ---------------------------------------------------------
-    // QUICK NORMAL MEMBER REGISTRATION (+ Front-Desk Claiming)
+    // QUICK NORMAL MEMBER REGISTRATION (+ Safe Multi-Tenant Claiming)
     // ---------------------------------------------------------
     const explicitGymCode =
       typeof input.gymCode === "string" && input.gymCode.trim() ? input.gymCode.trim() : "";
@@ -266,25 +317,39 @@ export async function POST(request: Request) {
     ];
     if (email) lookupOr.push({ email });
 
-    const existing = await MemberModel.findOne({
+    const matches = await MemberModel.find({
       ...(explicitGym ? { gymId: explicitGym._id } : {}),
       $or: lookupOr,
     })
       .select("+passwordHash")
       .sort({ createdAt: -1 });
 
+    if (matches.some((m) => Boolean(m.passwordHash))) {
+      return memberApiResponse(
+        request,
+        { error: "An account already exists for this phone or email. Please sign in." },
+        409,
+      );
+    }
+
+    const distinctUnclaimedGymIds = new Set(
+      matches.filter((m) => m.gymId).map((m) => String(m.gymId)),
+    );
+    if (!explicitGym && distinctUnclaimedGymIds.size > 1) {
+      return memberApiResponse(
+        request,
+        {
+          error:
+            "Multiple gyms have a front-desk profile for this phone number. Ask your gym for its gym slug/code to claim the right profile.",
+        },
+        409,
+      );
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
+    const existing = matches[0];
 
     if (existing) {
-      if (existing.passwordHash) {
-        return memberApiResponse(
-          request,
-          { error: "An account already exists for this phone or email. Please sign in." },
-          409,
-        );
-      }
-
-      // Claim existing front-desk profile created by staff (preserves their gym & membership if any)
       existing.passwordHash = passwordHash;
       if (email && !existing.email) {
         existing.email = email;
@@ -311,7 +376,6 @@ export async function POST(request: Request) {
     }
 
     // Brand-new self-registered member: NOT attached to any gym or plan yet!
-    // They connect by scanning a gym's QR code, picking a plan & payment method, and getting accepted by staff.
     const member = await MemberModel.create({
       ...(explicitGym ? { gymId: explicitGym._id } : {}),
       fullName,

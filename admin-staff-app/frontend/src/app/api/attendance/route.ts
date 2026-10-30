@@ -1,5 +1,12 @@
 import { NextRequest } from "next/server";
 import { Types } from "mongoose";
+import {
+  addGymDays,
+  DEFAULT_GYM_CAPACITY,
+  formatTimeInTimezone,
+  getLocalHourInTimezone,
+  startOfGymDay,
+} from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import AttendanceModel from "gymos-admin-backend/models/attendance";
 import GymModel from "gymos-admin-backend/models/gym";
@@ -7,43 +14,30 @@ import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import PaymentModel from "gymos-admin-backend/models/payment";
 import TrainerModel from "gymos-admin-backend/models/trainer";
-import { resolveActiveGymId } from "@/lib/gym-context";
+import { requireStaffContext, resolveStaffContext } from "@/lib/gym-context";
 import { isAllowedMemberOrigin, memberApiOptions, memberApiResponse } from "@/lib/member-auth";
 import {
   getMemberTokenFromRequest,
   MEMBER_SESSION_COOKIE,
   verifyMemberSessionToken,
 } from "@/lib/member-session";
-import {
-  getStaffTokenFromRequest,
-  STAFF_SESSION_COOKIE,
-  verifyStaffSessionToken,
-} from "@/lib/staff-session";
+import { hasConflictingGymRef } from "@/lib/tenant-guard";
 
 export const runtime = "nodejs";
 
 type MembershipStatus = "Active" | "Expired" | "Unpaid";
 
-function startOfToday() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
-}
-
-function formatTime(date: Date) {
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(date);
-}
-
 function getMembershipStatus(
   memberStatus: string,
   membership: { status: string; expiryDate: Date; paymentStatus?: string } | undefined,
   latestPaymentStatus: string | undefined,
+  todayStart: Date,
 ): MembershipStatus {
   if (
     memberStatus !== "active" ||
     !membership ||
     membership.status !== "active" ||
-    membership.expiryDate < startOfToday()
+    membership.expiryDate < todayStart
   ) {
     return "Expired";
   }
@@ -51,7 +45,7 @@ function getMembershipStatus(
   return paymentStatus === "Paid" ? "Active" : "Unpaid";
 }
 
-function computePeakHours(recentCheckInDates: Date[]) {
+function computePeakHours(recentCheckInDates: Date[], timeZone: string) {
   const buckets = [
     { label: "6–10 AM", minHour: 6, maxHour: 10, count: 0 },
     { label: "11 AM–3 PM", minHour: 11, maxHour: 15, count: 0 },
@@ -60,7 +54,7 @@ function computePeakHours(recentCheckInDates: Date[]) {
   ];
 
   for (const date of recentCheckInDates) {
-    const hour = date.getHours();
+    const hour = getLocalHourInTimezone(date, timeZone);
     for (const bucket of buckets) {
       if (hour >= bucket.minHour && hour < bucket.maxHour) {
         bucket.count += 1;
@@ -82,23 +76,18 @@ function computePeakHours(recentCheckInDates: Date[]) {
 }
 
 export async function GET(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return memberApiResponse(request, { error: "GYMOS_GYM_ID must be set to a valid gym ID." }, 500);
-  }
-
   try {
-    await connectToDatabase();
-    const gym = await GymModel.findById(gymId).select("name slug");
-    if (!gym) {
-      return memberApiResponse(request, { error: "Configured gym was not found." }, 404);
+    const auth = await requireStaffContext(request);
+    if (auth.response) {
+      return auth.response;
     }
+    const { gymId, gym } = auth.ctx;
+    const tz = gym.timezone;
 
-    const today = startOfToday();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    await connectToDatabase();
+    const today = startOfGymDay(new Date(), tz);
+    const tomorrow = addGymDays(today, 1, tz);
+    const thirtyDaysAgo = addGymDays(today, -30, tz);
 
     const [members, trainers] = await Promise.all([
       MemberModel.find({ gymId }).sort({ fullName: 1 }).lean(),
@@ -107,14 +96,23 @@ export async function GET(request: Request) {
     const memberIds = members.map((member) => member._id);
     const [records, occupancy, memberships, payments, recentHistory] = await Promise.all([
       AttendanceModel.find({ gymId, checkInTime: { $gte: today, $lt: tomorrow } })
-        .populate({ path: "memberId", model: MemberModel, select: "fullName" })
-        .populate({ path: "trainerId", model: TrainerModel, select: "name specialty" })
+        .populate({ path: "memberId", model: MemberModel, match: { gymId }, select: "fullName" })
+        .populate({
+          path: "trainerId",
+          model: TrainerModel,
+          match: { gymId },
+          select: "name specialty",
+        })
         .sort({ checkInTime: -1 })
         .lean(),
       AttendanceModel.countDocuments({ gymId, status: "checked-in" }),
-      MembershipModel.find({ gymId, memberId: { $in: memberIds } }).sort({ expiryDate: -1 }).lean(),
+      MembershipModel.find({ gymId, memberId: { $in: memberIds } })
+        .sort({ expiryDate: -1 })
+        .lean(),
       PaymentModel.find({ gymId, memberId: { $in: memberIds } }).sort({ date: -1 }).lean(),
-      AttendanceModel.find({ gymId, checkInTime: { $gte: thirtyDaysAgo } }).select("checkInTime").lean(),
+      AttendanceModel.find({ gymId, checkInTime: { $gte: thirtyDaysAgo } })
+        .select("checkInTime")
+        .lean(),
     ]);
 
     const membershipByMember = new Map<string, (typeof memberships)[number]>();
@@ -141,6 +139,7 @@ export async function GET(request: Request) {
         member.status,
         membership ? { ...membership, expiryDate: new Date(membership.expiryDate) } : undefined,
         paymentStatusByMember.get(id),
+        today,
       );
       memberStatusById.set(id, membershipStatus);
       const isoExpiry = membership?.expiryDate
@@ -199,7 +198,7 @@ export async function GET(request: Request) {
             trainerId: id,
             memberName: trainer.name,
             specialty: trainer.specialty ?? "Trainer",
-            time: formatTime(new Date(record.checkInTime)),
+            time: formatTimeInTimezone(new Date(record.checkInTime), tz),
             checkInTime: new Date(record.checkInTime).toISOString(),
             membershipStatus: "Active" as MembershipStatus,
             checkedOut: record.status === "checked-out" || Boolean(record.checkOutTime),
@@ -208,7 +207,10 @@ export async function GET(request: Request) {
         ];
       }
 
-      const member = record.memberId as unknown as { _id: Types.ObjectId; fullName: string } | null;
+      const member = record.memberId as unknown as {
+        _id: Types.ObjectId;
+        fullName: string;
+      } | null;
       if (!member) return [];
       const id = member._id.toString();
       return [
@@ -217,7 +219,7 @@ export async function GET(request: Request) {
           personType: "member" as const,
           memberId: id,
           memberName: member.fullName,
-          time: formatTime(new Date(record.checkInTime)),
+          time: formatTimeInTimezone(new Date(record.checkInTime), tz),
           checkInTime: new Date(record.checkInTime).toISOString(),
           membershipStatus: memberStatusById.get(id) ?? "Expired",
           checkedOut: record.status === "checked-out" || Boolean(record.checkOutTime),
@@ -226,7 +228,10 @@ export async function GET(request: Request) {
       ];
     });
 
-    const peakHours = computePeakHours(recentHistory.map((item) => new Date(item.checkInTime)));
+    const peakHours = computePeakHours(
+      recentHistory.map((item) => new Date(item.checkInTime)),
+      tz,
+    );
 
     return memberApiResponse(request, {
       gymName: gym.name,
@@ -234,7 +239,7 @@ export async function GET(request: Request) {
       gymQrPayload: `GYMOS-GYM:${gymId.toString()}`,
       checkIns,
       occupancy,
-      capacity: 100,
+      capacity: gym.capacity,
       peakHours,
       members: memberOptions,
       trainers: trainerOptions,
@@ -254,15 +259,6 @@ export async function POST(request: NextRequest) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
 
-  const [staffSession, mobileSession] = await Promise.all([
-    verifyStaffSessionToken(
-      getStaffTokenFromRequest(request, request.cookies.get(STAFF_SESSION_COOKIE)?.value),
-    ),
-    verifyMemberSessionToken(
-      getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
-    ),
-  ]);
-
   let input: Record<string, unknown>;
   try {
     const body: unknown = await request.json();
@@ -274,61 +270,143 @@ export async function POST(request: NextRequest) {
     return memberApiResponse(request, { error: "Request body must be valid JSON." }, 400);
   }
 
-  const isSelfScanRequest =
-    input.source === "Member self-scan" ||
-    input.source === "Trainer self-scan" ||
-    typeof input.gymQrPayload === "string" ||
-    (!staffSession && Boolean(mobileSession));
-
-  if (input.action === "checkout") {
-    if (!staffSession) {
-      return memberApiResponse(request, { error: "Only gym staff can check out attendees." }, 403);
-    }
-  } else if (isSelfScanRequest) {
-    if (!mobileSession) {
-      return memberApiResponse(request, { error: "App login is required to check in." }, 401);
-    }
-  } else if (!staffSession) {
-    return memberApiResponse(request, { error: "Authentication required." }, 401);
-  }
-
   try {
     await connectToDatabase();
 
-    let gymId =
-      isSelfScanRequest && mobileSession && Types.ObjectId.isValid(mobileSession.gymId)
-        ? new Types.ObjectId(mobileSession.gymId)
-        : await resolveActiveGymId(request);
+    const [staffContext, mobileSession] = await Promise.all([
+      resolveStaffContext(request),
+      verifyMemberSessionToken(
+        getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
+      ),
+    ]);
 
-    if (
-      isSelfScanRequest &&
-      mobileSession?.role === "member" &&
-      !gymId &&
-      Types.ObjectId.isValid(mobileSession.memberId)
-    ) {
-      const memberLookup = await MemberModel.findById(mobileSession.memberId).select("gymId");
-      if (memberLookup?.gymId && Types.ObjectId.isValid(String(memberLookup.gymId))) {
-        gymId = new Types.ObjectId(String(memberLookup.gymId));
-      } else {
+    const isSelfScanRequest =
+      input.action !== "checkout" &&
+      (input.source === "Member self-scan" ||
+        input.source === "Trainer self-scan" ||
+        typeof input.gymQrPayload === "string" ||
+        (!staffContext && Boolean(mobileSession)));
+
+    if (input.action === "checkout") {
+      if (!staffContext) {
+        if (mobileSession) {
+          return memberApiResponse(
+            request,
+            { error: "Only gym staff can check out attendees." },
+            403,
+          );
+        }
+        const staffCheck = await requireStaffContext(request, input);
+        if (staffCheck.response) return staffCheck.response;
+      }
+      if (
+        staffContext &&
+        hasConflictingGymRef(request, { id: staffContext.gym.id, slug: staffContext.gym.slug }, input)
+      ) {
         return memberApiResponse(
           request,
-          {
-            error:
-              "You do not have an active gym membership yet. Scan the gym QR code to subscribe to a plan first.",
-          },
+          { error: "Cross-gym access denied: requested gymId does not match your assigned gym." },
           403,
         );
       }
+    } else if (isSelfScanRequest) {
+      if (!mobileSession) {
+        return memberApiResponse(request, { error: "App login is required to check in." }, 401);
+      }
+    } else {
+      const staffCheck = await requireStaffContext(request, input);
+      if (staffCheck.response) return staffCheck.response;
+    }
+
+    // Resolve authoritative gymId from live DB state (never trusting client gymId or stale login-time gymId)
+    let gymId: Types.ObjectId | null = null;
+    if (isSelfScanRequest && mobileSession) {
+      if (mobileSession.role === "member") {
+        if (!Types.ObjectId.isValid(mobileSession.memberId)) {
+          return memberApiResponse(request, { error: "Invalid member session." }, 401);
+        }
+        const memberLookup = await MemberModel.findById(mobileSession.memberId).select(
+          "gymId status",
+        );
+        if (!memberLookup) {
+          return memberApiResponse(request, { error: "Member authentication is required." }, 401);
+        }
+        if (memberLookup.status === "suspended") {
+          return memberApiResponse(
+            request,
+            { error: "Your member account is currently suspended." },
+            403,
+          );
+        }
+        if (
+          mobileSession.gymId &&
+          (!memberLookup.gymId || String(memberLookup.gymId) !== mobileSession.gymId)
+        ) {
+          return memberApiResponse(
+            request,
+            { error: "Member gym relationship could not be verified." },
+            403,
+          );
+        }
+        if (memberLookup.gymId && Types.ObjectId.isValid(String(memberLookup.gymId))) {
+          gymId = new Types.ObjectId(String(memberLookup.gymId));
+        } else {
+          return memberApiResponse(
+            request,
+            {
+              error:
+                "You do not have an active gym membership yet. Scan the gym QR code to subscribe to a plan first.",
+            },
+            403,
+          );
+        }
+      } else if (mobileSession.role === "trainer") {
+        if (
+          !Types.ObjectId.isValid(mobileSession.trainerId) ||
+          !Types.ObjectId.isValid(mobileSession.gymId)
+        ) {
+          return memberApiResponse(request, { error: "Invalid trainer session." }, 401);
+        }
+        const trainerLookup = await TrainerModel.findOne({
+          _id: mobileSession.trainerId,
+          gymId: mobileSession.gymId,
+        }).select("gymId status");
+        if (!trainerLookup || trainerLookup.status === "inactive") {
+          return memberApiResponse(
+            request,
+            { error: "Trainer account is unavailable." },
+            403,
+          );
+        }
+        gymId = new Types.ObjectId(String(trainerLookup.gymId));
+      }
+    } else if (staffContext) {
+      gymId = staffContext.gymId;
     }
 
     if (!gymId) {
-      return memberApiResponse(request, { error: "GYMOS_GYM_ID must be set to a valid gym ID." }, 500);
+      return memberApiResponse(request, { error: "Authentication required." }, 401);
     }
 
-    const gym = await GymModel.findById(gymId).select("name slug");
+    const gym = await GymModel.findOne({
+      _id: gymId,
+      status: "active",
+    }).select("name slug capacity timezone");
     if (!gym) {
-      return memberApiResponse(request, { error: "Configured gym was not found." }, 404);
+      return memberApiResponse(request, { error: "Gym workspace is unavailable." }, 403);
     }
+
+    if (hasConflictingGymRef(request, { id: gymId.toString(), slug: gym.slug }, input)) {
+      return memberApiResponse(
+        request,
+        { error: "Cross-gym access denied: requested gymId does not match your authorized gym." },
+        403,
+      );
+    }
+
+    const gymCapacity =
+      typeof gym.capacity === "number" && gym.capacity > 0 ? gym.capacity : DEFAULT_GYM_CAPACITY;
+    const tz = gym.timezone || "Africa/Cairo";
 
     if (input.action === "checkout") {
       if (typeof input.checkInId !== "string" || !Types.ObjectId.isValid(input.checkInId)) {
@@ -351,14 +429,19 @@ export async function POST(request: NextRequest) {
     }
 
     if (isSelfScanRequest && mobileSession) {
-      const scannedPayload = typeof input.gymQrPayload === "string" ? input.gymQrPayload.trim() : "";
+      const scannedPayload =
+        typeof input.gymQrPayload === "string" ? input.gymQrPayload.trim() : "";
       const expectedPayload = `GYMOS-GYM:${gymId.toString()}`;
       const matchesPayload =
         scannedPayload === expectedPayload ||
         scannedPayload.toLowerCase() === gym.slug.toLowerCase() ||
         scannedPayload === gymId.toString();
       if (!matchesPayload) {
-        return memberApiResponse(request, { error: "This QR code does not belong to your gym." }, 403);
+        return memberApiResponse(
+          request,
+          { error: "This QR code does not belong to your gym." },
+          403,
+        );
       }
     }
 
@@ -366,6 +449,8 @@ export async function POST(request: NextRequest) {
       (isSelfScanRequest && mobileSession?.role === "trainer") ||
       (!isSelfScanRequest &&
         (input.personType === "trainer" || typeof input.trainerId === "string"));
+
+    const today = startOfGymDay(new Date(), tz);
 
     // ---------------------------------------------------------
     // TRAINER CHECK-IN (Mobile QR self-scan OR Staff front-desk)
@@ -416,7 +501,7 @@ export async function POST(request: NextRequest) {
         gymId,
         status: "checked-in",
       });
-      if (occupancyBefore >= 100) {
+      if (occupancyBefore >= gymCapacity) {
         return memberApiResponse(
           request,
           { error: "The gym is currently at capacity. Please wait for a spot to open." },
@@ -424,7 +509,6 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const today = startOfToday();
       const existingCheckIn = await AttendanceModel.exists({
         gymId,
         trainerId: trainer._id,
@@ -455,7 +539,7 @@ export async function POST(request: NextRequest) {
             trainerId: trainer._id.toString(),
             memberName: trainer.name,
             specialty: trainer.specialty,
-            time: formatTime(attendance.checkInTime),
+            time: formatTimeInTimezone(attendance.checkInTime, tz),
             checkInTime: attendance.checkInTime.toISOString(),
             membershipStatus: "Active",
             checkedOut: false,
@@ -510,7 +594,7 @@ export async function POST(request: NextRequest) {
     const membership = await MembershipModel.findOne({ gymId, memberId: member._id }).sort({
       expiryDate: -1,
     });
-    if (!membership || membership.status !== "active" || membership.expiryDate < startOfToday()) {
+    if (!membership || membership.status !== "active" || membership.expiryDate < today) {
       return memberApiResponse(
         request,
         { error: "Membership is expired. Please renew before checking in." },
@@ -530,8 +614,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const occupancyBefore = await AttendanceModel.countDocuments({ gymId, status: "checked-in" });
-    if (occupancyBefore >= 100) {
+    const occupancyBefore = await AttendanceModel.countDocuments({
+      gymId,
+      status: "checked-in",
+    });
+    if (occupancyBefore >= gymCapacity) {
       return memberApiResponse(
         request,
         { error: "The gym is currently at capacity. Please wait for a spot to open." },
@@ -539,7 +626,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const today = startOfToday();
     const existingCheckIn = await AttendanceModel.exists({
       gymId,
       memberId: member._id,
@@ -568,7 +654,7 @@ export async function POST(request: NextRequest) {
           personType: "member",
           memberId: member._id.toString(),
           memberName: member.fullName,
-          time: formatTime(attendance.checkInTime),
+          time: formatTimeInTimezone(attendance.checkInTime, tz),
           checkInTime: attendance.checkInTime.toISOString(),
           membershipStatus: "Active",
           checkedOut: false,

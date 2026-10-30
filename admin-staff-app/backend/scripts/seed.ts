@@ -11,6 +11,8 @@ import MembershipModel from "../models/membership";
 import MembershipPlanModel from "../models/membership-plan";
 import MembershipRequestModel from "../models/membership-request";
 import PaymentModel from "../models/payment";
+import PlatformAdminModel, { PLATFORM_PERMISSIONS } from "../models/platform-admin";
+import StaffInviteModel from "../models/staff-invite";
 import StaffUserModel from "../models/staff-user";
 import TrainerModel from "../models/trainer";
 import TrainerInviteModel from "../models/trainer-invite";
@@ -93,6 +95,10 @@ async function seed() {
         name: "GymOS Elite - New Cairo",
         address: "New Cairo, Cairo, Egypt",
         phone: "+20225000000",
+        status: "active",
+        capacity: 100,
+        timezone: "Africa/Cairo",
+        currency: "EGP",
       },
       $setOnInsert: {
         slug: "gymos-elite-new-cairo",
@@ -102,20 +108,46 @@ async function seed() {
     { new: true, upsert: true, runValidators: true },
   );
 
-  // Seed default demo staff account (idempotent)
-  const existingStaff = await StaffUserModel.findOne({ email: "admin@gymos.local" });
-  if (!existingStaff) {
+  // Seed default demo gym owner account (idempotent)
+  let ownerStaff = await StaffUserModel.findOne({ email: "admin@gymos.local" });
+  if (!ownerStaff) {
     const staffPasswordHash = await hashStaffPassword("GymOSAdmin123!");
-    await StaffUserModel.create({
+    ownerStaff = await StaffUserModel.create({
       gymId: gym._id,
       fullName: "Omar Khaled",
       email: "admin@gymos.local",
       passwordHash: staffPasswordHash,
+      role: "owner",
+      status: "active",
     });
-  } else if (String(existingStaff.gymId) !== String(gym._id)) {
-    existingStaff.gymId = gym._id;
-    await existingStaff.save();
+  } else {
+    ownerStaff.gymId = gym._id;
+    ownerStaff.role = "owner";
+    ownerStaff.status = "active";
+    await ownerStaff.save();
   }
+
+  if (!gym.ownerUserId || String(gym.ownerUserId) !== String(ownerStaff._id)) {
+    gym.ownerUserId = ownerStaff._id;
+    await gym.save();
+  }
+
+  // Seed a demo Staff Invite Code for receptionists/managers in this gym
+  await StaffInviteModel.findOneAndUpdate(
+    { code: "STF-RECEP-2026" },
+    {
+      $setOnInsert: {
+        gymId: gym._id,
+        code: "STF-RECEP-2026",
+        role: "staff",
+        presetName: "Front Desk Reception",
+        status: "unused",
+        createdByUserId: ownerStaff._id,
+        expiresAt: daysFromToday(30),
+      },
+    },
+    { upsert: true, runValidators: true },
+  );
 
   // Seed membership plans
   for (const plan of samplePlans) {
@@ -567,9 +599,31 @@ async function seed() {
   }
   await MembershipRequestModel.deleteMany({ status: "declined" });
 
+  // Optional Platform Administrator bootstrap via environment variables (no hardcoded production credentials)
+  const platformAdminEmail = process.env.GYMOS_PLATFORM_ADMIN_EMAIL?.trim().toLowerCase();
+  const platformAdminPassword = process.env.GYMOS_PLATFORM_ADMIN_PASSWORD;
+  if (platformAdminEmail && platformAdminPassword && platformAdminPassword.length >= 10) {
+    const platformPasswordHash = await hashStaffPassword(platformAdminPassword);
+    await PlatformAdminModel.findOneAndUpdate(
+      { email: platformAdminEmail },
+      {
+        $set: {
+          fullName: "GymOS Platform Admin",
+          passwordHash: platformPasswordHash,
+          permissions: [...PLATFORM_PERMISSIONS],
+          status: "active",
+        },
+        $setOnInsert: { email: platformAdminEmail },
+      },
+      { upsert: true, runValidators: true },
+    );
+    console.info(`Platform Admin     : ${platformAdminEmail} (bootstrapped from env)`);
+  }
+
   console.info(`Seeded GymOS sample data for gym ${gym._id.toString()} (${gym.slug}).`);
   console.info(`GYMOS_GYM_ID=${gym._id.toString()}`);
-  console.info("Demo Staff Login   : admin@gymos.local / GymOSAdmin123!");
+  console.info("Demo Staff Login   : admin@gymos.local / GymOSAdmin123! (Owner)");
+  console.info("Staff Invite Code  : STF-RECEP-2026 (Front Desk Staff)");
   console.info("Demo Member Login  : sam.rivera@example.com / MemberPass123!");
   console.info("New Member (No Gym): lina.adel@example.com / MemberPass123!");
   console.info("Demo Trainer Login : karim.mansour@example.com / TrainerPass123!");

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  ArrowLeft,
   Banknote,
   Building2,
   Check,
@@ -82,7 +81,6 @@ const PAYMENT_METHOD_META: Record<
 };
 
 export function MemberOnboardingView({
-  adminAppUrl,
   memberName,
   memberPhone,
   memberEmail,
@@ -94,7 +92,6 @@ export function MemberOnboardingView({
   onRefreshPortal,
   onLogout,
 }: {
-  adminAppUrl: string;
   memberName: string;
   memberPhone: string;
   memberEmail?: string;
@@ -192,12 +189,11 @@ export function MemberOnboardingView({
       .join("") || "MB";
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#edf1f2] px-0 py-0 sm:px-6 sm:py-8">
+    <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
       <section
         aria-label="GymOS member onboarding"
-        className="flex h-[100dvh] w-full max-w-[410px] flex-col overflow-hidden bg-[#f7f8fa] shadow-[0_24px_80px_rgba(24,33,47,0.16)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-[34px] sm:border-[7px] sm:border-[#172433]"
+        className="flex h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[#f7f8fa] shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
       >
-        {/* Header — notice NO gym branch/name is shown before staff accepts! */}
         <header className="flex min-h-[72px] items-center justify-between border-b border-[#edf0f2] bg-white px-5 pt-[max(env(safe-area-inset-top),8px)]">
           <div className="flex items-center gap-3">
             <span
@@ -216,15 +212,6 @@ export function MemberOnboardingView({
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <a
-              href={adminAppUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-[10px] font-medium text-[#74808e] hover:bg-[#f3f5f6]"
-            >
-              <ArrowLeft size={13} aria-hidden="true" />
-              Staff Web
-            </a>
             <button
               type="button"
               onClick={() => void onLogout()}

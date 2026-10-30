@@ -19,6 +19,7 @@ const memberSchema = new Schema(
 );
 
 memberSchema.index({ gymId: 1, phone: 1 });
+memberSchema.index({ gymId: 1, email: 1 }, { sparse: true });
 memberSchema.index({ phone: 1 });
 memberSchema.index({ gymId: 1, fullName: 1 });
 

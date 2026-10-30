@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
-import { verifyStaffPassword } from "gymos-admin-backend/lib/staff-password";
+import { hashStaffPassword, verifyStaffPassword } from "gymos-admin-backend/lib/staff-password";
+import GymModel from "gymos-admin-backend/models/gym";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { isPreviewModeEnabled } from "@/lib/security";
 import {
   createStaffSessionToken,
   getStaffCookieOptions,
@@ -12,7 +15,30 @@ import {
 
 export const runtime = "nodejs";
 
+let dummyStaffHashPromise: Promise<string> | null = null;
+function getDummyStaffHash(): Promise<string> {
+  if (!dummyStaffHashPromise) {
+    dummyStaffHashPromise = hashStaffPassword("gymos_dummy_timing_equalizer_password");
+  }
+  return dummyStaffHashPromise;
+}
+
 export async function POST(request: Request) {
+  const rate = checkRateLimit(request, {
+    namespace: "staff-login",
+    limit: 15,
+    windowMs: 10 * 60_000,
+  });
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Too many sign-in attempts. Please wait a few minutes and try again." },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rate.retryAfterSeconds) },
+      },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -34,12 +60,32 @@ export async function POST(request: Request) {
   try {
     await connectToDatabase();
     const user = await StaffUserModel.findOne({ email }).select("+passwordHash");
-    const validPassword =
-      user && (await verifyStaffPassword(password, user.passwordHash));
+    const targetHash = user ? user.passwordHash : await getDummyStaffHash();
+    const validPassword = await verifyStaffPassword(password, targetHash);
+
     if (!user || !validPassword) {
       return NextResponse.json({ error: "Email or password is incorrect." }, { status: 401 });
     }
 
+    if (user.status === "inactive") {
+      return NextResponse.json(
+        { error: "This staff account has been deactivated. Contact your gym owner." },
+        { status: 403 },
+      );
+    }
+
+    const gym = await GymModel.findById(user.gymId).select("name slug status");
+    if (!gym) {
+      return NextResponse.json({ error: "Assigned gym workspace was not found." }, { status: 404 });
+    }
+    if (gym.status === "suspended") {
+      return NextResponse.json(
+        { error: "This gym workspace is currently suspended." },
+        { status: 403 },
+      );
+    }
+
+    const role = user.role === "owner" ? "owner" : "staff";
     const duration = rememberMe
       ? REMEMBERED_SESSION_DURATION_SECONDS
       : STAFF_SESSION_DURATION_SECONDS;
@@ -49,12 +95,14 @@ export async function POST(request: Request) {
         name: user.fullName,
         email: user.email,
         gymId: user.gymId.toString(),
+        role,
       },
       duration,
     );
     const response = NextResponse.json({
-      user: { name: user.fullName, email: user.email },
-      sessionToken: token,
+      user: { name: user.fullName, email: user.email, role },
+      gym: { id: gym._id.toString(), name: gym.name, slug: gym.slug },
+      ...(isPreviewModeEnabled() ? { sessionToken: token } : {}),
     });
     response.cookies.set(
       STAFF_SESSION_COOKIE,

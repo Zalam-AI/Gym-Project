@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Bell, Check, CheckCircle2, ChevronDown, LoaderCircle, Menu, Smartphone, X } from "lucide-react";
+import { Bell, Check, CheckCircle2, ChevronDown, LoaderCircle, Menu, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Sidebar, type NavigationPage } from "@/components/sidebar";
@@ -11,8 +11,6 @@ import {
 } from "@/lib/staff-client-auth";
 
 ensureStaffFetchPatched();
-
-const configuredMemberAppUrl = process.env.NEXT_PUBLIC_MEMBER_APP_URL;
 
 type AttentionAlert = {
   id: string;
@@ -60,11 +58,11 @@ export function AppShell({ activePage, children }: AppShellProps) {
   const [requestError, setRequestError] = useState<string>("");
   const [accountName, setAccountName] = useState("Staff");
   const [accountEmail, setAccountEmail] = useState("");
+  const [accountRole, setAccountRole] = useState<"owner" | "staff">("staff");
+  const [gymName, setGymName] = useState("");
+  const [gymSlug, setGymSlug] = useState("");
   const [logoutError, setLogoutError] = useState("");
   const [todayLabel, setTodayLabel] = useState("");
-  const [memberAppUrl, setMemberAppUrl] = useState(
-    configuredMemberAppUrl ?? "http://localhost:3001",
-  );
 
   useEffect(() => {
     setTodayLabel(
@@ -74,11 +72,6 @@ export function AppShell({ activePage, children }: AppShellProps) {
         day: "numeric",
       }).format(new Date()),
     );
-    if (!configuredMemberAppUrl && typeof window !== "undefined") {
-      if (window.location.hostname.startsWith("3000-")) {
-        setMemberAppUrl(window.location.origin.replace("://3000-", "://3001-"));
-      }
-    }
   }, []);
 
   const loadNotifications = useCallback(async () => {
@@ -108,44 +101,56 @@ export function AppShell({ activePage, children }: AppShellProps) {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/auth/session")
-      .then(async (response) => {
-        if (response.status === 401) {
-          clearStaffSessionToken();
-          router.replace("/login");
-          return null;
-        }
-        if (!response.ok) {
-          throw new Error("Unable to load account details.");
-        }
-        return (await response.json()) as {
-          user: { name: string; email: string };
-        };
-      })
-      .then((result) => {
-        if (active && result?.user) {
-          setAccountName(result.user.name);
-          setAccountEmail(result.user.email);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setLogoutError("Unable to load account details. Please refresh the page.");
-        }
-      });
+    const loadSession = () => {
+      fetch("/api/auth/session", { cache: "no-store" })
+        .then(async (response) => {
+          if (response.status === 401) {
+            clearStaffSessionToken();
+            router.replace("/login");
+            return null;
+          }
+          if (!response.ok) {
+            throw new Error("Unable to load account details.");
+          }
+          return (await response.json()) as {
+            user: { name: string; email: string; role?: "owner" | "staff" };
+            gym?: { name: string; slug: string };
+          };
+        })
+        .then((result) => {
+          if (active && result?.user) {
+            setAccountName(result.user.name);
+            setAccountEmail(result.user.email);
+            setAccountRole(result.user.role === "owner" ? "owner" : "staff");
+            if (result.gym) {
+              setGymName(result.gym.name);
+              setGymSlug(result.gym.slug);
+            }
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setLogoutError("Unable to load account details. Please refresh the page.");
+          }
+        });
+    };
 
+    loadSession();
     void loadNotifications();
     const interval = window.setInterval(() => {
       void loadNotifications();
     }, 4000);
 
     const onUpdated = () => void loadNotifications();
+    const onGymUpdated = () => loadSession();
     window.addEventListener("gymos:membership-updated", onUpdated);
+    window.addEventListener("gymos:gym-updated", onGymUpdated);
 
     return () => {
       active = false;
       window.clearInterval(interval);
       window.removeEventListener("gymos:membership-updated", onUpdated);
+      window.removeEventListener("gymos:gym-updated", onGymUpdated);
     };
   }, [loadNotifications, router]);
 
@@ -229,6 +234,8 @@ export function AppShell({ activePage, children }: AppShellProps) {
         activePage={activePage}
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
+        gymName={gymName}
+        gymSlug={gymSlug}
       />
 
       <div className="min-h-screen md:pl-[220px] lg:pl-[248px]">
@@ -246,7 +253,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
             </button>
             <div>
               <p className="text-[11px] text-[#9099a5]">
-                Welcome, {accountName.split(/\s+/)[0]}
+                {gymName ? `${gymName} · ` : ""}Welcome, {accountName.split(/\s+/)[0]}
               </p>
               <p className="text-[13px] font-semibold text-[#303b4a]">
                 {todayLabel || "Today"}
@@ -254,17 +261,6 @@ export function AppShell({ activePage, children }: AppShellProps) {
             </div>
           </div>
           <div className="flex items-center gap-3 sm:gap-5">
-            <a
-              href={memberAppUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Preview Member App"
-              className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-[#dce7e1] px-2.5 text-[11px] font-semibold text-[#278968] hover:bg-[#f1f8f4] sm:px-3"
-            >
-              <Smartphone size={15} aria-hidden="true" />
-              <span className="hidden sm:inline">Preview Member App</span>
-            </a>
-
             <div className="relative">
               <button
                 type="button"
@@ -440,13 +436,30 @@ export function AppShell({ activePage, children }: AppShellProps) {
                   className="absolute right-0 top-[calc(100%+12px)] z-30 w-64 rounded-2xl border border-[#e9edf1] bg-white p-2 shadow-[0_16px_40px_rgba(23,36,51,0.14)]"
                 >
                   <div className="border-b border-[#edf0f3] px-3 py-2.5">
-                    <p className="truncate text-[13px] font-semibold text-[#303b4a]">
-                      {accountName}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-[13px] font-semibold text-[#303b4a]">
+                        {accountName}
+                      </p>
+                      <span className="rounded-full bg-[#e8f4ee] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#258765]">
+                        {accountRole}
+                      </span>
+                    </div>
                     <p className="mt-1 truncate text-[11px] text-[#87909d]">
                       {accountEmail}
                     </p>
+                    {gymName && (
+                      <p className="mt-1 truncate text-[10px] font-medium text-[#278968]">
+                        {gymName}
+                      </p>
+                    )}
                   </div>
+                  <Link
+                    href="/settings"
+                    onClick={() => setAccountMenuOpen(false)}
+                    className="mt-1 flex min-h-9 w-full items-center rounded-xl px-3 text-left text-[12px] font-medium text-[#354153] hover:bg-slate-50"
+                  >
+                    Gym &amp; Team Settings
+                  </Link>
                   {logoutError && (
                     <p role="alert" className="px-3 py-2 text-[11px] text-red-700">
                       {logoutError}

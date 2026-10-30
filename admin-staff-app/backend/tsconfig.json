@@ -10,5 +10,5 @@
     "moduleResolution": "Bundler",
     "types": ["node"]
   },
-  "include": ["lib/**/*.ts", "models/**/*.ts", "scripts/**/*.ts"]
+  "include": ["lib/**/*.ts", "models/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }

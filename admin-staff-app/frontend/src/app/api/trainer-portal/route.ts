@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { Types } from "mongoose";
+import { startOfGymDay } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import AttendanceModel from "gymos-admin-backend/models/attendance";
 import GymModel from "gymos-admin-backend/models/gym";
@@ -20,15 +21,124 @@ import {
   MEMBER_SESSION_COOKIE,
   verifyMemberSessionToken,
 } from "@/lib/member-session";
+import {
+  getPlatformTokenFromRequest,
+  PLATFORM_SESSION_COOKIE,
+  verifyPlatformSessionToken,
+} from "@/lib/platform-session";
+import {
+  getStaffTokenFromRequest,
+  STAFF_SESSION_COOKIE,
+  verifyStaffSessionToken,
+} from "@/lib/staff-session";
+import { hasConflictingGymRef } from "@/lib/tenant-guard";
 
 export const runtime = "nodejs";
 
 const VALID_DAYS = new Set(["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"]);
 
-function startOfToday() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
+async function authenticateVerifiedTrainer(
+  request: NextRequest,
+  body?: Record<string, unknown> | null,
+) {
+  const session = await verifyMemberSessionToken(
+    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
+  );
+  if (!session) {
+    const [staffAttempt, platformAttempt] = await Promise.all([
+      verifyStaffSessionToken(
+        getStaffTokenFromRequest(request, request.cookies.get(STAFF_SESSION_COOKIE)?.value),
+      ),
+      verifyPlatformSessionToken(
+        getPlatformTokenFromRequest(request, request.cookies.get(PLATFORM_SESSION_COOKIE)?.value),
+      ),
+    ]);
+    if (staffAttempt || platformAttempt) {
+      return {
+        response: memberApiResponse(
+          request,
+          { error: "Trainer account permissions are required." },
+          403,
+        ),
+      };
+    }
+    return {
+      response: memberApiResponse(request, { error: "Trainer authentication is required." }, 401),
+    };
+  }
+
+  if (session.role !== "trainer") {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "Trainer permissions are required to access this portal." },
+        403,
+      ),
+    };
+  }
+
+  if (!Types.ObjectId.isValid(session.trainerId) || !Types.ObjectId.isValid(session.gymId)) {
+    return {
+      response: memberApiResponse(request, { error: "Trainer authentication is required." }, 401),
+    };
+  }
+
+  const gymId = new Types.ObjectId(session.gymId);
+  const trainerId = new Types.ObjectId(session.trainerId);
+
+  await connectToDatabase();
+  const [gym, trainer] = await Promise.all([
+    GymModel.findById(gymId).select("name slug timezone status"),
+    TrainerModel.findOne({ _id: trainerId, gymId }),
+  ]);
+
+  if (!gym) {
+    return {
+      response: memberApiResponse(request, { error: "Configured gym was not found." }, 404),
+    };
+  }
+  if (gym.status !== "active") {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "This gym workspace is currently suspended." },
+        403,
+      ),
+    };
+  }
+  if (!trainer || trainer.status === "inactive") {
+    return {
+      response: memberApiResponse(request, { error: "Trainer account is unavailable." }, 403),
+    };
+  }
+
+  if (hasConflictingGymRef(request, { id: gymId.toString(), slug: gym.slug }, body)) {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "Cross-gym access denied: requested gymId does not match your assigned gym." },
+        403,
+      ),
+    };
+  }
+
+  const queryTrainerId = request.nextUrl.searchParams.get("trainerId")?.trim();
+  const bodyTrainerId =
+    body && typeof body.trainerId === "string" ? body.trainerId.trim() : "";
+  if (
+    (queryTrainerId && queryTrainerId !== trainer._id.toString()) ||
+    (bodyTrainerId && bodyTrainerId !== trainer._id.toString())
+  ) {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "Access denied: trainers may only access their own profile." },
+        403,
+      ),
+    };
+  }
+
+  return { gymId, gym, trainer };
 }
 
 export async function OPTIONS(request: Request) {
@@ -40,39 +150,25 @@ export async function GET(request: NextRequest) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
 
-  const session = await verifyMemberSessionToken(
-    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
-  );
-  if (
-    !session ||
-    session.role !== "trainer" ||
-    !Types.ObjectId.isValid(session.trainerId) ||
-    !Types.ObjectId.isValid(session.gymId)
-  ) {
-    return memberApiResponse(request, { error: "Trainer authentication is required." }, 401);
-  }
-
-  const gymId = new Types.ObjectId(session.gymId);
-  const trainerId = new Types.ObjectId(session.trainerId);
-
   try {
-    await connectToDatabase();
-    const [gym, trainer] = await Promise.all([
-      GymModel.findById(gymId).select("name slug"),
-      TrainerModel.findOne({ _id: trainerId, gymId }),
-    ]);
+    const auth = await authenticateVerifiedTrainer(request);
+    if (auth.response) return auth.response;
+    const { gymId, gym, trainer } = auth;
 
-    if (!gym) {
-      return memberApiResponse(request, { error: "Configured gym was not found." }, 404);
-    }
-    if (!trainer) {
-      return memberApiResponse(request, { error: "Trainer account was not found." }, 404);
-    }
-
-    const today = startOfToday();
-    const assignedIds = (trainer.assignedMemberIds ?? []).map(
+    const today = startOfGymDay(new Date(), gym.timezone);
+    const assignedIds: Types.ObjectId[] = (trainer.assignedMemberIds ?? []).map(
       (id: unknown) => new Types.ObjectId(String(id)),
     );
+    const assignedIdSet = new Set<string>(assignedIds.map((id: Types.ObjectId) => id.toString()));
+
+    const requestedMemberId = request.nextUrl.searchParams.get("memberId")?.trim();
+    if (requestedMemberId && !assignedIdSet.has(requestedMemberId)) {
+      return memberApiResponse(
+        request,
+        { error: "Access denied: you are only authorized to view trainees assigned to you." },
+        403,
+      );
+    }
 
     const [
       assignedMembers,
@@ -93,7 +189,10 @@ export async function GET(request: NextRequest) {
             .lean()
         : Promise.resolve([]),
       assignedIds.length
-        ? PaymentModel.find({ gymId, memberId: { $in: assignedIds } }).sort({ date: -1 }).lean()
+        ? PaymentModel.find({ gymId, memberId: { $in: assignedIds } })
+            .select("memberId status date")
+            .sort({ date: -1 })
+            .lean()
         : Promise.resolve([]),
       WorkoutPlanModel.find({ gymId }).sort({ title: 1 }).lean(),
       AttendanceModel.find({
@@ -115,7 +214,12 @@ export async function GET(request: NextRequest) {
         .limit(20)
         .lean(),
       TrainingSessionModel.find({ gymId, trainerId: trainer._id })
-        .populate({ path: "memberId", model: MemberModel, select: "fullName phone" })
+        .populate({
+          path: "memberId",
+          model: MemberModel,
+          match: { gymId },
+          select: "fullName phone",
+        })
         .sort({ startsAt: 1 })
         .limit(60)
         .lean(),
@@ -253,8 +357,6 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    const gymQrPayload = `GYMOS-GYM:${gymId.toString()}`;
-
     return memberApiResponse(request, {
       role: "trainer",
       trainer: {
@@ -262,7 +364,6 @@ export async function GET(request: NextRequest) {
         gymId: gymId.toString(),
         gymName: gym.name,
         gymSlug: gym.slug,
-        gymQrPayload,
         name: trainer.name,
         specialty: trainer.specialty,
         phone: trainer.phone,
@@ -281,7 +382,6 @@ export async function GET(request: NextRequest) {
           endTime: slot.endTime,
         })),
       },
-      gymQrPayload,
       trainees,
       sessions: serializedSessions,
       workoutPlans: serializedWorkoutPlans.map(({ assignedMemberIds: _ids, ...plan }) => {
@@ -306,32 +406,21 @@ export async function POST(request: NextRequest) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
 
-  const session = await verifyMemberSessionToken(
-    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
-  );
-  if (
-    !session ||
-    session.role !== "trainer" ||
-    !Types.ObjectId.isValid(session.trainerId) ||
-    !Types.ObjectId.isValid(session.gymId)
-  ) {
-    return memberApiResponse(request, { error: "Trainer authentication is required." }, 401);
-  }
-
+  let parsedInput: Record<string, unknown> | undefined;
   const parsed = await parseMemberAuthBody(request);
-  if (!parsed.input) {
-    return memberApiResponse(request, { error: parsed.error }, 400);
+  if (parsed.input) {
+    parsedInput = parsed.input;
   }
-  const input = parsed.input;
-  const gymId = new Types.ObjectId(session.gymId);
-  const trainerId = new Types.ObjectId(session.trainerId);
 
   try {
-    await connectToDatabase();
-    const trainer = await TrainerModel.findOne({ _id: trainerId, gymId });
-    if (!trainer) {
-      return memberApiResponse(request, { error: "Trainer account was not found." }, 404);
+    const auth = await authenticateVerifiedTrainer(request, parsedInput);
+    if (auth.response) return auth.response;
+    const { gymId, trainer } = auth;
+
+    if (!parsedInput) {
+      return memberApiResponse(request, { error: parsed.error }, 400);
     }
+    const input = parsedInput;
 
     if (input.action === "create-session") {
       const memberId = typeof input.memberId === "string" ? input.memberId.trim() : "";
@@ -430,6 +519,14 @@ export async function POST(request: NextRequest) {
         { new: true },
       );
       if (!updated) {
+        const existsInSameGym = await TrainingSessionModel.exists({ _id: sessionId, gymId });
+        if (existsInSameGym) {
+          return memberApiResponse(
+            request,
+            { error: "Access denied: you can only modify your own coaching sessions." },
+            403,
+          );
+        }
         return memberApiResponse(request, { error: "Session was not found." }, 404);
       }
 

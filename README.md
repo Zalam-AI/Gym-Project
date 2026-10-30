@@ -4,16 +4,18 @@ GymOS is a full-stack multi-app gym management system built with Next.js 15, Typ
 
 ## Workspace Structure
 
-- `admin-staff-app/frontend` — Staff & Admin web workspace (`http://localhost:3000`):
-  - **Staff Auth** (`/login`, `/register` with private staff invite code, HMAC-signed HTTP-only cookies)
-  - **Live Dashboard** (`/`) — Real-time active members, daily check-ins, monthly EGP revenue, 7-day attendance SVG chart, and actionable renewal/payment alerts
+- `admin-staff-app/frontend` — Multi-tenant Staff & Owner SaaS web workspace (`http://localhost:3000`):
+  - **Multi-Tenant Onboarding & Staff Auth** (`/login`, `/register` — launch a **new gym workspace** as Owner in seconds, or join an existing gym with a one-time `STF-XXXX-XXXX` Staff Invite Code)
+  - **Live Dashboard** (`/`) — Real-time active members, daily check-ins (in the gym's local timezone), monthly EGP revenue, 7-day attendance SVG chart, and actionable renewal/payment alerts
   - **Members** (`/members`) — Search/filter directory and modal onboarding synced with membership plans & initial payments
   - **Memberships** (`/memberships`) — Custom membership plans (EGP), incoming Mobile App subscription requests with one-click payment acceptance, and subscription renewals
   - **Live Subscription Notifications** (Header Bell & Top Bar) — Instant notifications showing member name, chosen plan, EGP amount, and payment method (`Cash`, `Card`, `Instapay`) with one-click **Accept Payment & Activate**
-  - **Attendance & Check-ins** (`/attendance`) — Real scannable front-desk Reception QR code (`qrcode.react`) for onboarding new members and checking in active members & trainers, quick attendee lookup, live gym occupancy, peak hours, and check-out controls
+  - **Attendance & Check-ins** (`/attendance`) — Real scannable front-desk Reception QR code (`qrcode.react`) for onboarding new members and checking in active members & trainers, configurable gym capacity, local-timezone peak hours, and check-out controls
   - **Payments & Financial Records** (`/payments`) — EGP revenue summaries, Cash / Card / Instapay filtering, payment recording, and printable/downloadable receipts
   - **Trainers & Workouts** (`/trainers`) — Coaching directory, one-time **Trainer App Invite Code** generator (`TRN-XXXX-XXXX`), 1-on-1 coaching session scheduler, multi-exercise workout plan builder, and member workout assignments
-- `admin-staff-app/backend` — Shared MongoDB connection utility (with Atlas SRV Cloudflare DNS fallback), Mongoose schemas (`Gym`, `StaffUser`, `Member`, `MembershipPlan`, `Membership`, `MembershipRequest`, `Attendance`, `Payment`, `Trainer`, `TrainerInvite`, `TrainingSession`, `WorkoutPlan`), and idempotent demo seed script
+  - **Gym & Team Settings** (`/settings`) — Club profile, floor capacity, IANA timezone, Reception QR copy, staff roster activation/deactivation, and per-gym Staff Invite Code (`STF-XXXX-XXXX`) management
+  - **Health Probe** (`/api/health`) — Database readiness check for cloud load balancers & uptime monitors
+- `admin-staff-app/backend` — Shared MongoDB connection utility (with SRV retry & Replica Set transaction helper), timezone utilities (`lib/gym-time.ts`), Mongoose schemas (`Gym`, `StaffUser`, `StaffInvite`, `Member`, `MembershipPlan`, `Membership`, `MembershipRequest`, `Attendance`, `Payment`, `Trainer`, `TrainerInvite`, `TrainingSession`, `WorkoutPlan`), and idempotent demo seed script
 - `mobile-app/frontend` — Unified **Members & Trainers Mobile App** (`http://localhost:3001`):
   - **Fast Member Registration & Claiming** — Quick signup with just Full Name, Phone, and Password (automatically links existing front-desk memberships if phone/email matches)
   - **QR Gym Connection & Plan Onboarding** — Members without an active gym plan start with a clean QR-only screen (no gym branch or renewal nag), scan the gym's Reception QR code to view live plans, pick a payment method (`Cash`, `Card`, `Instapay`), and unlock their gym pass automatically as soon as staff clicks **Accept**
@@ -33,10 +35,8 @@ npm install
 
 ```env
 MONGODB_URI=your_mongodb_connection_string
-MONGODB_DNS_SERVERS=1.1.1.1
-GYMOS_GYM_ID=your_seeded_gym_object_id
 GYMOS_SESSION_SECRET=replace_with_a_random_secret_at_least_32_characters
-GYMOS_STAFF_INVITE_CODE=choose_a_private_staff_invitation_code
+GYMOS_ALLOW_PREVIEW_ORIGINS=0
 ```
 
 Generate a strong session secret with:
@@ -67,7 +67,8 @@ npm run dev:member
 
 | Role / Flow | Identifier / Code | Password | Notes |
 | --- | --- | --- | --- |
-| **Staff Admin** (`/login`) | `admin@gymos.local` | `GymOSAdmin123!` | Full access to GymOS Staff Website |
+| **Staff Owner** (`/login`) | `admin@gymos.local` | `GymOSAdmin123!` | Full Owner access to `GymOS Elite - New Cairo` |
+| **Staff Invite Code** (`/register` → Join) | `STF-RECEP-2026` | *(Set in Join existing gym)* | One-time staff invite code for `GymOS Elite - New Cairo` |
 | **Active Trainer (Mobile App)** | `karim.mansour@example.com` *(or `+201015550101`)* | `TrainerPass123!` | Coach account with assigned trainees, shifts & scheduled sessions |
 | **Trainer Invite Code (Existing Coach)** | `TRN-MAYA-2026` | *(Set in Create Account → Trainer)* | Links directly to **Maya Hassan** & her assigned trainee |
 | **Trainer Invite Code (New Coach)** | `TRN-COACH-2026` | *(Set in Create Account → Trainer)* | Open one-time code to register any brand-new trainer |
@@ -85,4 +86,31 @@ npm run lint:admin
 npm run lint:member
 npm run build:admin
 npm run build:member
+npm run export:member
+npm run test:isolation
 ```
+
+## Deploying to Render
+
+`admin-staff-app/frontend` (which imports `admin-staff-app/backend` via npm workspaces) serves **both** the Staff Website and all `/api/*` backend endpoints as a single Render Node.js Web Service (`render.yaml` included):
+
+- **Service Type:** Web Service (`Node`)
+- **Root Directory:** *(leave blank — repository root)*
+- **Build Command:** `npm ci --include=dev && npm run build:admin`
+- **Start Command:** `npm run start:admin`
+- **Health Check Path:** `/api/health`
+- **Environment Variables (set before build):**
+  - `NODE_ENV=production`
+  - `NODE_VERSION=20.18.0`
+  - `MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/gymos?retryWrites=true&w=majority`
+  - `GYMOS_SESSION_SECRET=<32+ character random secret>`
+  - `GYMOS_ALLOW_PREVIEW_ORIGINS=0`
+  - `GYMOS_STAFF_APP_ORIGINS=https://<your-service>.onrender.com`
+  - `GYMOS_MEMBER_APP_ORIGINS=capacitor://localhost,https://localhost` *(plus mobile web URL if applicable)*
+
+To export the standalone Mobile App pointed at your deployed Render service:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=https://<your-service>.onrender.com npm run export:member
+```
+

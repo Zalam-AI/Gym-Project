@@ -1,12 +1,19 @@
 export const STAFF_SESSION_COOKIE = "gymos_staff_session";
 export const STAFF_SESSION_DURATION_SECONDS = 12 * 60 * 60;
 export const REMEMBERED_SESSION_DURATION_SECONDS = 30 * 24 * 60 * 60;
+export const STAFF_SESSION_HEADER = "x-gymos-session";
+
+const STAFF_SIGNING_DOMAIN = "staff";
+
+export type StaffRole = "owner" | "staff";
 
 export type StaffSession = {
+  typ: "staff";
   sub: string;
   name: string;
   email: string;
   gymId: string;
+  role: StaffRole;
   exp: number;
 };
 
@@ -57,22 +64,36 @@ export function getStaffCookieOptions(request: Request, maxAge?: number) {
     Boolean(request.headers.get("origin")?.startsWith("https://")) ||
     request.url.startsWith("https://");
 
+  const useCrossSitePreviewCookie =
+    isHttps && process.env.GYMOS_ALLOW_PREVIEW_ORIGINS === "1";
+
   return {
     httpOnly: true,
     secure: isHttps,
-    sameSite: (isHttps ? "none" : "lax") as "none" | "lax",
-    ...(isHttps ? { partitioned: true } : {}),
+    sameSite: (useCrossSitePreviewCookie ? "none" : "lax") as "none" | "lax",
+    ...(useCrossSitePreviewCookie ? { partitioned: true } : {}),
     path: "/",
     ...(maxAge !== undefined ? { maxAge } : {}),
   };
 }
 
 export async function createStaffSessionToken(
-  session: Omit<StaffSession, "exp">,
+  session: {
+    sub: string;
+    name: string;
+    email: string;
+    gymId: string;
+    role?: StaffRole;
+  },
   durationSeconds: number,
 ): Promise<string> {
   const payload: StaffSession = {
-    ...session,
+    typ: "staff",
+    sub: session.sub,
+    name: session.name,
+    email: session.email,
+    gymId: session.gymId,
+    role: session.role === "owner" ? "owner" : "staff",
     exp: Math.floor(Date.now() / 1000) + durationSeconds,
   };
   const payloadPart = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
@@ -80,12 +101,10 @@ export async function createStaffSessionToken(
   const signature = await crypto.subtle.sign(
     "HMAC",
     key,
-    new TextEncoder().encode(payloadPart),
+    new TextEncoder().encode(`${STAFF_SIGNING_DOMAIN}.${payloadPart}`),
   );
   return `${payloadPart}.${encodeBase64Url(new Uint8Array(signature))}`;
 }
-
-export const STAFF_SESSION_HEADER = "x-gymos-session";
 
 export function getStaffTokenFromRequest(
   request: Request,
@@ -95,11 +114,13 @@ export function getStaffTokenFromRequest(
   if (customHeader) {
     return customHeader;
   }
-  try {
-    const queryToken = new URL(request.url).searchParams.get("_gst")?.trim();
-    if (queryToken) return queryToken;
-  } catch {
-    // Ignore malformed URL.
+  if (process.env.GYMOS_ALLOW_PREVIEW_ORIGINS === "1") {
+    try {
+      const queryToken = new URL(request.url).searchParams.get("_gst")?.trim();
+      if (queryToken) return queryToken;
+    } catch {
+      // Ignore malformed URL.
+    }
   }
   if (cookieToken) return cookieToken;
   const rawCookie = request.headers.get("cookie");
@@ -128,44 +149,53 @@ export async function verifyStaffSessionToken(
     }
 
     const key = await getSigningKey(getSessionSecret());
-    const expectedSignature = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      new TextEncoder().encode(payloadPart),
+    const domainSig = encodeBase64Url(
+      new Uint8Array(
+        await crypto.subtle.sign(
+          "HMAC",
+          key,
+          new TextEncoder().encode(`${STAFF_SIGNING_DOMAIN}.${payloadPart}`),
+        ),
+      ),
     );
-    const expectedSignaturePart = encodeBase64Url(new Uint8Array(expectedSignature));
-    if (!constantTimeEqual(expectedSignaturePart, signaturePart)) {
+
+    if (!constantTimeEqual(domainSig, signaturePart)) {
       return null;
     }
 
     const payload: unknown = JSON.parse(
       new TextDecoder().decode(decodeBase64Url(payloadPart)),
     );
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const raw = payload as Record<string, unknown>;
+    if (raw.typ !== "staff") {
+      return null;
+    }
+    if ("role" in raw && raw.role !== "owner" && raw.role !== "staff") {
+      return null;
+    }
     if (
-      !payload ||
-      typeof payload !== "object" ||
-      !("sub" in payload) ||
-      !("name" in payload) ||
-      !("email" in payload) ||
-      !("gymId" in payload) ||
-      !("exp" in payload)
+      typeof raw.sub !== "string" ||
+      typeof raw.name !== "string" ||
+      typeof raw.email !== "string" ||
+      typeof raw.gymId !== "string" ||
+      typeof raw.exp !== "number" ||
+      raw.exp <= Math.floor(Date.now() / 1000)
     ) {
       return null;
     }
 
-    const session = payload as StaffSession;
-    if (
-      typeof session.sub !== "string" ||
-      typeof session.name !== "string" ||
-      typeof session.email !== "string" ||
-      typeof session.gymId !== "string" ||
-      typeof session.exp !== "number" ||
-      session.exp <= Math.floor(Date.now() / 1000)
-    ) {
-      return null;
-    }
-
-    return session;
+    return {
+      typ: "staff",
+      sub: raw.sub,
+      name: raw.name,
+      email: raw.email,
+      gymId: raw.gymId,
+      role: raw.role === "owner" ? "owner" : "staff",
+      exp: raw.exp,
+    };
   } catch {
     return null;
   }

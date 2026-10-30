@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { Types } from "mongoose";
+import { startOfGymDay } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import AttendanceModel from "gymos-admin-backend/models/attendance";
 import GymModel from "gymos-admin-backend/models/gym";
@@ -16,6 +17,17 @@ import {
   verifyMemberSessionToken,
 } from "@/lib/member-session";
 import { isAllowedMemberOrigin, memberApiOptions, memberApiResponse } from "@/lib/member-auth";
+import {
+  getPlatformTokenFromRequest,
+  PLATFORM_SESSION_COOKIE,
+  verifyPlatformSessionToken,
+} from "@/lib/platform-session";
+import {
+  getStaffTokenFromRequest,
+  STAFF_SESSION_COOKIE,
+  verifyStaffSessionToken,
+} from "@/lib/staff-session";
+import { extractRequestedGymRefs, hasConflictingGymRef } from "@/lib/tenant-guard";
 
 export const runtime = "nodejs";
 
@@ -37,11 +49,32 @@ export async function GET(request: NextRequest) {
     getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
   );
   if (!session) {
+    const [staffAttempt, platformAttempt] = await Promise.all([
+      verifyStaffSessionToken(
+        getStaffTokenFromRequest(request, request.cookies.get(STAFF_SESSION_COOKIE)?.value),
+      ),
+      verifyPlatformSessionToken(
+        getPlatformTokenFromRequest(request, request.cookies.get(PLATFORM_SESSION_COOKIE)?.value),
+      ),
+    ]);
+    if (staffAttempt || platformAttempt) {
+      return memberApiResponse(request, { error: "Member account permissions are required." }, 403);
+    }
     return memberApiResponse(request, { error: "Member authentication is required." }, 401);
   }
 
   // If the signed-in mobile user is a trainer, report role cleanly so the app loads the trainer portal
   if (session.role === "trainer") {
+    if (
+      hasConflictingGymRef(request, { id: session.gymId }) ||
+      request.nextUrl.searchParams.has("memberId")
+    ) {
+      return memberApiResponse(
+        request,
+        { error: "Cross-gym or unauthorized member access denied." },
+        403,
+      );
+    }
     return memberApiResponse(request, { role: "trainer" });
   }
 
@@ -49,11 +82,37 @@ export async function GET(request: NextRequest) {
     return memberApiResponse(request, { error: "Member authentication is required." }, 401);
   }
 
+  const requestedMemberId = request.nextUrl.searchParams.get("memberId")?.trim();
+  if (requestedMemberId && requestedMemberId !== session.memberId) {
+    return memberApiResponse(
+      request,
+      { error: "Access denied: you may only view your own member profile." },
+      403,
+    );
+  }
+
   try {
     await connectToDatabase();
     const member = await MemberModel.findById(session.memberId);
     if (!member) {
-      return memberApiResponse(request, { error: "Member account was not found." }, 404);
+      return memberApiResponse(request, { error: "Member authentication is required." }, 401);
+    }
+    if (member.status === "suspended") {
+      return memberApiResponse(
+        request,
+        { error: "Your member account is currently suspended." },
+        403,
+      );
+    }
+    if (
+      session.gymId &&
+      (!member.gymId || String(member.gymId) !== session.gymId)
+    ) {
+      return memberApiResponse(
+        request,
+        { error: "Member gym relationship could not be verified." },
+        403,
+      );
     }
 
     // Check if the member currently has a pending subscription request awaiting staff approval
@@ -98,7 +157,33 @@ export async function GET(request: NextRequest) {
         })
       : null;
 
-    const gym = memberGymId ? await GymModel.findById(memberGymId).select("name slug") : null;
+    const gym = memberGymId
+      ? await GymModel.findById(memberGymId).select("name slug timezone status")
+      : null;
+
+    if (gym && gym.status !== "active") {
+      return memberApiResponse(
+        request,
+        { error: "This gym workspace is currently suspended." },
+        403,
+      );
+    }
+
+    if (memberGymId && gym) {
+      if (hasConflictingGymRef(request, { id: memberGymId.toString(), slug: gym.slug })) {
+        return memberApiResponse(
+          request,
+          { error: "Cross-gym access denied: members may only access their own gym's information." },
+          403,
+        );
+      }
+    } else if (extractRequestedGymRefs(request).length > 0) {
+      return memberApiResponse(
+        request,
+        { error: "Cross-gym access denied: your account is not enrolled in that gym." },
+        403,
+      );
+    }
 
     // If the member isn't enrolled in any plan in a gym yet, do NOT assign a gym branch or tell them
     // their plan needs renewal — let them onboard by scanning a gym's QR code!
@@ -129,8 +214,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfGymDay(new Date(), gym.timezone);
 
     const [latestPayment, workoutDoc, trainerDoc, visits, sessionDocs] = await Promise.all([
       PaymentModel.findOne({ gymId: memberGymId, memberId: member._id }).sort({ date: -1 }),
@@ -149,7 +233,12 @@ export async function GET(request: NextRequest) {
         status: "scheduled",
         startsAt: { $gte: today },
       })
-        .populate({ path: "trainerId", model: TrainerModel, select: "name specialty" })
+        .populate({
+          path: "trainerId",
+          model: TrainerModel,
+          match: { gymId: memberGymId },
+          select: "name specialty",
+        })
         .sort({ startsAt: 1 })
         .limit(10)
         .lean(),
@@ -164,8 +253,6 @@ export async function GET(request: NextRequest) {
         : (latestPayment?.status ?? membership.paymentStatus) === "Paid"
           ? "Active"
           : "Unpaid";
-
-    const gymQrPayload = `GYMOS-GYM:${memberGymId.toString()}`;
 
     return memberApiResponse(request, {
       role: "member",
@@ -184,10 +271,8 @@ export async function GET(request: NextRequest) {
         startDate: membership.startDate.toISOString().slice(0, 10),
         expiryDate: membership.expiryDate.toISOString().slice(0, 10),
         paymentStatus: latestPayment?.status ?? membership.paymentStatus ?? "Paid",
-        gymQrPayload,
         enrolledInGym: true,
       },
-      gymQrPayload,
       trainer: trainerDoc
         ? {
             id: trainerDoc._id.toString(),
