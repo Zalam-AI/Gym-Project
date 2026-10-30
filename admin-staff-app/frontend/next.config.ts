@@ -17,8 +17,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: isPreviewMode
-    ? ["*.e2b.app", "localhost", "127.0.0.1"]
-    : ["localhost", "127.0.0.1"],
+    ? ["*.e2b.app", "*.localhost", "localhost", "127.0.0.1"]
+    : ["*.localhost", "localhost", "127.0.0.1"],
   async headers() {
     return [
       {
@@ -35,6 +35,7 @@ const nextConfig: NextConfig = {
           GYMOS_ALLOW_PREVIEW_ORIGINS: "",
           GYMOS_STAFF_APP_ORIGINS: "",
           GYMOS_MEMBER_APP_ORIGINS: "",
+          GYMOS_BASE_DOMAIN: "",
         }),
       );
     }

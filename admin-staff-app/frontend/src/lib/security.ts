@@ -34,6 +34,7 @@ export function isPreviewOriginUrl(origin: string): boolean {
     const parsed = new URL(origin);
     return (
       parsed.hostname === "localhost" ||
+      parsed.hostname.endsWith(".localhost") ||
       parsed.hostname === "127.0.0.1" ||
       (isPreviewModeEnabled() && parsed.hostname.endsWith(".e2b.app"))
     );

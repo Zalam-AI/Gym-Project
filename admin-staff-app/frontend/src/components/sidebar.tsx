@@ -43,9 +43,25 @@ type SidebarProps = {
   onClose: () => void;
   gymName?: string;
   gymSlug?: string;
+  gymSubdomain?: string;
+  gymLogoText?: string;
+  gymAccentColor?: string;
 };
 
-export function Sidebar({ activePage, open, onClose, gymName, gymSlug }: SidebarProps) {
+export function Sidebar({
+  activePage,
+  open,
+  onClose,
+  gymName,
+  gymSlug,
+  gymSubdomain,
+  gymLogoText,
+  gymAccentColor,
+}: SidebarProps) {
+  const accentColor =
+    gymAccentColor && /^#[0-9a-fA-F]{6}$/.test(gymAccentColor)
+      ? gymAccentColor
+      : "#45b58b";
   return (
     <>
       {open && (
@@ -65,16 +81,30 @@ export function Sidebar({ activePage, open, onClose, gymName, gymSlug }: Sidebar
         <div className="mb-8 flex items-center justify-between px-2">
           <Link
             href="/"
-            className="flex items-center gap-3 rounded-lg"
+            className="flex min-w-0 items-center gap-3 rounded-lg"
             aria-label="GymOS home"
             onClick={onClose}
           >
-            <span className="grid size-9 place-items-center rounded-xl bg-[#45b58b] text-[15px] font-bold text-white">
-              G
+            <span
+              className="grid size-9 shrink-0 place-items-center rounded-xl text-[13px] font-bold text-white"
+              style={{ backgroundColor: accentColor }}
+            >
+              {gymLogoText || "G"}
             </span>
-            <span className="text-[20px] font-semibold tracking-[-0.04em]">
-              Gym<span className="text-[#63c69d]">OS</span>
-            </span>
+            <div className="min-w-0">
+              <span className="block truncate text-[17px] font-semibold tracking-[-0.03em]">
+                {gymName || (
+                  <>
+                    Gym<span className="text-[#63c69d]">OS</span>
+                  </>
+                )}
+              </span>
+              {gymName && (
+                <span className="block truncate text-[10px] font-medium text-slate-400">
+                  Powered by GymOS
+                </span>
+              )}
+            </div>
           </Link>
           <button
             type="button"
@@ -106,7 +136,12 @@ export function Sidebar({ activePage, open, onClose, gymName, gymSlug }: Sidebar
               >
                 <Icon size={18} aria-hidden="true" />
                 <span>{label}</span>
-                {isActive && <span className="ml-auto h-5 w-1 rounded-full bg-[#63c69d]" />}
+                {isActive && (
+                  <span
+                    className="ml-auto h-5 w-1 rounded-full"
+                    style={{ backgroundColor: accentColor }}
+                  />
+                )}
               </Link>
             );
           })}
@@ -124,9 +159,9 @@ export function Sidebar({ activePage, open, onClose, gymName, gymSlug }: Sidebar
           <p className="truncate text-[12px] font-semibold text-white">
             {gymName || "GymOS Workspace"}
           </p>
-          {gymSlug ? (
+          {gymSubdomain || gymSlug ? (
             <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">
-              {gymSlug}
+              {gymSubdomain || gymSlug}
             </p>
           ) : (
             <p className="mt-1 text-[11px] leading-5 text-slate-400">

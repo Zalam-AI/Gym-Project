@@ -125,6 +125,32 @@ export function formatIsoDateInTimezone(date: Date, rawTimeZone?: string | null)
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+export const RESERVED_GYM_SUBDOMAINS = new Set([
+  "www",
+  "app",
+  "api",
+  "admin",
+  "platform",
+  "portal",
+  "mobile",
+  "auth",
+  "login",
+  "register",
+  "mail",
+  "smtp",
+  "status",
+  "docs",
+  "help",
+  "support",
+  "cdn",
+  "static",
+  "assets",
+  "staging",
+  "dev",
+  "test",
+  "localhost",
+]);
+
 export function slugifyGymName(name: string): string {
   const base = name
     .toLowerCase()
@@ -133,4 +159,14 @@ export function slugifyGymName(name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
   return base || "gym";
+}
+
+export function subdomainifyGymName(name: string): string {
+  const compact = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 48);
+  const candidate = compact || "gym";
+  return RESERVED_GYM_SUBDOMAINS.has(candidate) ? `${candidate}club` : candidate;
 }

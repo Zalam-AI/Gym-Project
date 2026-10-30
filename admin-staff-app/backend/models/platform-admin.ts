@@ -1,9 +1,21 @@
 import { model, models, Schema, type InferSchemaType } from "mongoose";
 
+export const PLATFORM_ROLES = [
+  "platform_owner",
+  "platform_admin",
+  "platform_support",
+  "platform_auditor",
+] as const;
+
+export type PlatformRole = (typeof PLATFORM_ROLES)[number];
+
 export const PLATFORM_PERMISSIONS = [
   "gyms:read",
   "gyms:write",
   "platform:metrics",
+  "platform:config",
+  "platform:audit",
+  "platform:support",
 ] as const;
 
 export type PlatformPermission = (typeof PLATFORM_PERMISSIONS)[number];
@@ -24,6 +36,12 @@ const platformAdminSchema = new Schema(
       maxlength: 254,
     },
     passwordHash: { type: String, required: true, select: false },
+    role: {
+      type: String,
+      enum: PLATFORM_ROLES,
+      default: "platform_owner",
+      required: true,
+    },
     permissions: {
       type: [String],
       enum: PLATFORM_PERMISSIONS,
@@ -36,6 +54,7 @@ const platformAdminSchema = new Schema(
       default: "active",
       required: true,
     },
+    lastLoginAt: { type: Date },
   },
   { timestamps: true },
 );

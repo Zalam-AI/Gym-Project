@@ -1,21 +1,81 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Building2, KeyRound, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, ArrowRight, Building2, Globe, KeyRound } from "lucide-react";
 import { clearStaffSessionToken, setStaffSessionToken } from "@/lib/staff-client-auth";
 
-type AuthPageProps = {
-  mode: "login" | "register";
-};
+type AuthMode = "login" | "register";
+type RegistrationType = "create-gym" | "join-gym";
 
-export function AuthPage({ mode }: AuthPageProps) {
+type TenantBrandingPayload =
+  | {
+      mode: "neutral";
+      hostname: string;
+      baseDomain: string | null;
+      gym: null;
+    }
+  | {
+      mode: "tenant";
+      hostname: string;
+      resolvedBy: "subdomain" | "custom-domain";
+      gym: {
+        id: string;
+        name: string;
+        slug: string;
+        subdomain: string;
+        customDomain: string | null;
+        address: string;
+        timezone: string;
+        currency: string;
+        branding: {
+          accentColor: string;
+          tagline: string;
+          logoText: string;
+        };
+      };
+    }
+  | {
+      mode: "not-found";
+      hostname: string;
+      gym: null;
+      error: string;
+    }
+  | {
+      mode: "suspended";
+      hostname: string;
+      gym: {
+        name: string;
+        slug: string;
+        subdomain: string;
+      };
+      error: string;
+    };
+
+const features = [
+  "Members & QR passes",
+  "Plans & live renewals",
+  "Trainers & commissions",
+  "Payments & revenue",
+  "Floor attendance",
+];
+
+function safeNextPath(candidate: string | null): string {
+  if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
+    return "/";
+  }
+  if (candidate === "/login" || candidate === "/register") {
+    return "/";
+  }
+  return candidate;
+}
+
+export function AuthPage({ mode }: { mode: AuthMode }) {
   const router = useRouter();
   const isRegister = mode === "register";
-  const [registrationType, setRegistrationType] = useState<"create-gym" | "join-gym">(
-    "create-gym",
-  );
+  const [tenantState, setTenantState] = useState<TenantBrandingPayload | null>(null);
+  const [registrationType, setRegistrationType] = useState<RegistrationType>("create-gym");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -23,143 +83,257 @@ export function AuthPage({ mode }: AuthPageProps) {
   const [gymAddress, setGymAddress] = useState("");
   const [gymPhone, setGymPhone] = useState("");
   const [inviteCode, setInviteCode] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
+  const [infoNotice, setInfoNotice] = useState("");
   const [pending, setPending] = useState(false);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    let active = true;
+    async function loadTenantBranding() {
+      try {
+        const res = await fetch("/api/tenant", { cache: "no-store" });
+        const data = (await res.json()) as TenantBrandingPayload;
+        if (!active) return;
+        setTenantState(data);
+        if (data.mode === "tenant") {
+          setRegistrationType("join-gym");
+          if (typeof document !== "undefined") {
+            document.title = `${data.gym.name} — Staff Sign In | GymOS`;
+          }
+        }
+      } catch {
+        // Fall back gracefully to neutral branding if /api/tenant cannot be reached.
+      }
+    }
+    void loadTenantBranding();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const tenantGym = tenantState?.mode === "tenant" ? tenantState.gym : null;
+  const accentColor =
+    tenantGym?.branding.accentColor && /^#[0-9a-fA-F]{6}$/.test(tenantGym.branding.accentColor)
+      ? tenantGym.branding.accentColor
+      : "#45b58b";
+  const effectiveRegistrationType: RegistrationType = tenantGym ? "join-gym" : registrationType;
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setInfoNotice("");
     setPending(true);
     clearStaffSessionToken();
 
     try {
-      const payload = isRegister
-        ? registrationType === "create-gym"
-          ? {
-              registrationType: "create-gym",
-              fullName,
-              email,
-              password,
-              gymName,
-              gymAddress,
-              gymPhone,
-            }
-          : {
-              registrationType: "join-gym",
-              fullName,
-              email,
-              password,
-              inviteCode,
-            }
-        : {
-            email,
-            password,
-            rememberMe,
-          };
-
-      const response = await fetch(`/api/auth/${mode}`, {
+      const response = await fetch(isRegister ? "/api/auth/register" : "/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(
+          isRegister
+            ? effectiveRegistrationType === "create-gym"
+              ? {
+                  registrationType: "create-gym",
+                  fullName,
+                  email,
+                  password,
+                  gymName,
+                  gymAddress,
+                  gymPhone,
+                }
+              : {
+                  registrationType: "join-gym",
+                  fullName,
+                  email,
+                  password,
+                  inviteCode,
+                }
+            : { email, password, rememberMe },
+        ),
       });
-      const result = (await response.json()) as {
+
+      const payload = (await response.json()) as {
         error?: string;
         sessionToken?: string;
+        pendingApproval?: boolean;
+        message?: string;
       };
       if (!response.ok) {
-        setError(result.error ?? "We couldn't complete your request. Please try again.");
+        setError(payload.error ?? "Authentication failed.");
         return;
       }
-      if (result.sessionToken) {
-        setStaffSessionToken(result.sessionToken, isRegister || rememberMe);
+      if (payload.pendingApproval) {
+        setInfoNotice(
+          payload.message ??
+            "Your gym workspace has been submitted and is awaiting platform administrator approval.",
+        );
+        return;
       }
 
-      const requestedPath = new URLSearchParams(window.location.search).get("next");
-      const safePath =
-        !isRegister &&
-        requestedPath?.startsWith("/") &&
-        !requestedPath.startsWith("//") &&
-        !requestedPath.startsWith("/api/")
-          ? requestedPath
-          : "/";
-      router.replace(safePath);
+      if (payload.sessionToken) {
+        setStaffSessionToken(payload.sessionToken, isRegister || rememberMe);
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const destination = safeNextPath(params.get("next"));
+      router.replace(destination);
       router.refresh();
     } catch {
-      setError("Unable to reach GymOS. Check your connection and try again.");
+      setError("Network error while contacting GymOS. Please try again.");
     } finally {
       setPending(false);
     }
   }
 
-  return (
-    <main className="min-h-screen bg-[#f7f8fa] lg:grid lg:grid-cols-[minmax(0,1.05fr)_minmax(460px,0.95fr)]">
-      <section className="relative hidden min-h-screen overflow-hidden bg-[#172433] px-12 py-10 text-white lg:flex lg:flex-col lg:justify-between xl:px-20">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -right-36 -top-32 size-[520px] rounded-full border border-white/[0.06]"
-        />
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -right-16 -top-12 size-[360px] rounded-full border border-white/[0.08]"
-        />
-        <Link href="/login" className="relative z-10 inline-flex w-fit items-center gap-3">
-          <span className="auth-brand-mark grid size-11 place-items-center rounded-[15px] bg-[#45b58b] text-lg font-bold text-white">
-            G
-          </span>
-          <span className="text-[23px] font-semibold tracking-[-0.05em]">
-            Gym<span className="text-[#63c69d]">OS</span>
-          </span>
-        </Link>
-
-        <div className="relative z-10 max-w-xl pb-16">
-          <p className="mb-5 text-xs font-semibold uppercase tracking-[0.2em] text-[#77d0aa]">
-            Multi-Gym SaaS Platform
-          </p>
-          <h1 className="max-w-lg text-5xl font-semibold leading-[1.08] tracking-[-0.055em] xl:text-6xl">
-            A better view of your whole gym.
+  if (tenantState?.mode === "not-found" || tenantState?.mode === "suspended") {
+    return (
+      <main className="grid min-h-screen place-items-center bg-[#f4f6f8] p-6 text-[#182433]">
+        <div className="w-full max-w-[440px] rounded-2xl border border-[#e2e8ed] bg-white p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 grid size-12 place-items-center rounded-xl bg-amber-50 text-amber-600">
+            <AlertTriangle size={22} aria-hidden="true" />
+          </div>
+          <h1 className="text-xl font-semibold tracking-[-0.02em] text-[#172433]">
+            {tenantState.mode === "suspended"
+              ? `${tenantState.gym.name} Is Suspended`
+              : "Gym Workspace Not Found"}
           </h1>
-          <p className="mt-6 max-w-md text-[15px] leading-7 text-slate-300">
-            Launch a dedicated workspace for your club in seconds—complete with QR onboarding,
-            live member passes, coach invites, and financial tracking.
+          <p className="mt-2 text-[13px] leading-6 text-[#687586]">{tenantState.error}</p>
+          <p className="mt-4 rounded-xl bg-[#f8fafb] px-3 py-2 font-mono text-[11px] text-[#556375]">
+            {tenantState.hostname}
           </p>
-          <div className="mt-10 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs text-slate-300">
-            <ShieldCheck size={15} className="text-[#77d0aa]" aria-hidden="true" />
-            Isolated workspace per gym &amp; branch
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-[#f4f6f8] text-[#182433] lg:grid lg:grid-cols-[1.04fr_0.96fr]">
+      <section className="relative hidden flex-col justify-between overflow-hidden bg-[#18222e] p-12 text-white lg:flex xl:p-16">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-28 -right-24 size-96 rounded-full blur-3xl"
+          style={{ backgroundColor: `${accentColor}28` }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-32 -left-24 size-96 rounded-full bg-[#3b82f6]/10 blur-3xl"
+        />
+
+        <div className="relative flex items-center gap-3">
+          <span
+            className="grid size-9 place-items-center rounded-[10px] text-sm font-bold text-white shadow-sm"
+            style={{ backgroundColor: accentColor }}
+          >
+            {tenantGym ? tenantGym.branding.logoText : "G"}
+          </span>
+          <div>
+            <span className="block text-xl font-semibold tracking-[-0.025em]">
+              {tenantGym ? tenantGym.name : "GymOS"}
+            </span>
+            {tenantGym && (
+              <span className="block text-[11px] text-slate-400">Powered by GymOS</span>
+            )}
           </div>
         </div>
 
-        <p className="relative z-10 text-xs text-slate-500">GymOS Cloud Workspace</p>
+        <div className="relative max-w-xl">
+          <p
+            className="text-xs font-semibold uppercase tracking-[0.18em]"
+            style={{ color: accentColor }}
+          >
+            {tenantGym ? "Dedicated Gym Workspace" : "Multi-Gym SaaS Operations"}
+          </p>
+          <h1 className="mt-4 text-4xl leading-[1.12] font-semibold tracking-[-0.035em] text-white xl:text-[44px]">
+            {tenantGym
+              ? `${tenantGym.name} staff & club operations.`
+              : "Run every branch, membership, and coach from one workspace."}
+          </h1>
+          <p className="mt-5 max-w-lg text-[15px] leading-7 text-slate-300">
+            {tenantGym
+              ? tenantGym.branding.tagline ||
+                `Authorized staff portal for ${tenantGym.name} (${tenantGym.address}). Only staff assigned to this gym can sign in here.`
+              : "Launch a dedicated workspace for your gym in seconds, onboard reception staff via invite codes, and approve mobile member plans live."}
+          </p>
+
+          <div className="mt-9 flex flex-wrap gap-2.5">
+            {features.map((item) => (
+              <span
+                key={item}
+                className="rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs font-medium text-slate-200"
+              >
+                {item}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <p className="relative text-xs text-slate-400">
+          {tenantGym
+            ? `Tenant isolation enforced for ${tenantState?.hostname}.`
+            : "Protected with HTTP-only signed sessions and strict per-gym tenant isolation."}
+        </p>
       </section>
 
-      <section className="flex min-h-screen flex-col px-5 py-7 sm:px-10 lg:justify-center lg:px-14 xl:px-20">
-        <div className="mx-auto flex w-full max-w-[440px] flex-1 flex-col justify-center lg:flex-none">
-          <Link href="/login" className="mb-10 inline-flex w-fit items-center gap-2.5 lg:hidden">
-            <span className="auth-brand-mark grid size-10 place-items-center rounded-[14px] bg-[#45b58b] text-base font-bold text-white">
-              G
+      <section className="flex min-h-screen flex-col justify-between px-5 py-8 sm:px-10 lg:px-14">
+        <div className="flex items-center justify-between lg:justify-end">
+          <div className="flex items-center gap-2.5 lg:hidden">
+            <span
+              className="grid size-8 place-items-center rounded-[9px] text-sm font-bold text-white"
+              style={{ backgroundColor: accentColor }}
+            >
+              {tenantGym ? tenantGym.branding.logoText : "G"}
             </span>
-            <span className="text-[21px] font-semibold tracking-[-0.05em] text-[#172433]">
-              Gym<span className="text-[#2d9d78]">OS</span>
+            <span className="text-lg font-semibold tracking-[-0.02em] text-[#18222e]">
+              {tenantGym ? tenantGym.name : "GymOS"}
             </span>
+          </div>
+          <Link
+            href={isRegister ? "/login" : "/register"}
+            className="text-xs font-semibold hover:opacity-85"
+            style={{ color: accentColor }}
+          >
+            {isRegister
+              ? "Sign in instead"
+              : tenantGym
+                ? "Join staff with invite code"
+                : "Launch gym / Join staff"}
           </Link>
+        </div>
 
+        <div className="mx-auto my-10 w-full max-w-[440px]">
           <div className="mb-6">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#2d9d78]">
-              Staff &amp; Owner Workspace
-            </p>
-            <h2 className="mt-2.5 text-[30px] font-semibold tracking-[-0.045em] text-[#172433]">
-              {isRegister ? "Get started with GymOS" : "Welcome back"}
-            </h2>
-            <p className="mt-1.5 text-sm leading-6 text-[#737e8e]">
+            {tenantGym && (
+              <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-[#dce6e1] bg-white px-3 py-1 text-[11px] font-semibold text-[#354153] shadow-2xs">
+                <Globe size={12} style={{ color: accentColor }} aria-hidden="true" />
+                <span>{tenantState?.hostname}</span>
+              </div>
+            )}
+            <h2 className="text-[26px] font-semibold tracking-[-0.03em] text-[#172433]">
               {isRegister
-                ? registrationType === "create-gym"
-                  ? "Register your gym workspace as the owner."
-                  : "Join an existing gym team with a staff invite code."
-                : "Sign in to continue to your gym dashboard."}
+                ? effectiveRegistrationType === "create-gym"
+                  ? "Launch your gym on GymOS"
+                  : tenantGym
+                    ? `Join ${tenantGym.name} staff`
+                    : "Join your gym staff team"
+                : tenantGym
+                  ? `Sign in to ${tenantGym.name}`
+                  : "Sign in to GymOS"}
+            </h2>
+            <p className="mt-1.5 text-[13px] leading-6 text-[#737e8e]">
+              {isRegister
+                ? effectiveRegistrationType === "create-gym"
+                  ? "Create an isolated workspace for your gym with starter plans and owner access."
+                  : tenantGym
+                    ? `Enter the staff invitation code issued by ${tenantGym.name}'s owner.`
+                    : "Enter the staff invitation code generated by your gym owner in Settings."
+                : tenantGym
+                  ? `Enter your ${tenantGym.name} staff or owner credentials to continue.`
+                  : "Enter your staff or owner credentials to access your gym dashboard."}
             </p>
           </div>
 
-          {isRegister && (
+          {isRegister && !tenantGym && (
             <div
               role="tablist"
               aria-label="Registration mode"
@@ -203,7 +377,7 @@ export function AuthPage({ mode }: AuthPageProps) {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {isRegister && registrationType === "create-gym" && (
+            {isRegister && effectiveRegistrationType === "create-gym" && (
               <div className="space-y-3.5 rounded-2xl border border-[#e3e9ee] bg-white p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#2d9d78]">
                   Gym / Branch Details
@@ -301,7 +475,7 @@ export function AuthPage({ mode }: AuthPageProps) {
               />
             </label>
 
-            {isRegister && registrationType === "join-gym" && (
+            {isRegister && effectiveRegistrationType === "join-gym" && (
               <label className="block">
                 <span className="mb-1.5 block text-[13px] font-medium text-[#354153]">
                   Staff invitation code
@@ -329,6 +503,15 @@ export function AuthPage({ mode }: AuthPageProps) {
               </label>
             )}
 
+            {infoNotice && (
+              <p
+                role="status"
+                className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] leading-5 text-emerald-800"
+              >
+                {infoNotice}
+              </p>
+            )}
+
             {error && (
               <p
                 role="alert"
@@ -341,16 +524,17 @@ export function AuthPage({ mode }: AuthPageProps) {
             <button
               type="submit"
               disabled={pending}
-              className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#258765] px-4 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(37,135,101,0.16)] transition hover:bg-[#1d7758] disabled:cursor-wait disabled:opacity-70"
+              className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(37,135,101,0.16)] transition hover:opacity-95 disabled:cursor-wait disabled:opacity-70"
+              style={{ backgroundColor: tenantGym ? accentColor : "#258765" }}
             >
               {pending
                 ? isRegister
-                  ? registrationType === "create-gym"
+                  ? effectiveRegistrationType === "create-gym"
                     ? "Launching gym workspace..."
                     : "Joining gym..."
                   : "Signing in..."
                 : isRegister
-                  ? registrationType === "create-gym"
+                  ? effectiveRegistrationType === "create-gym"
                     ? "Create gym workspace"
                     : "Join gym as staff"
                   : "Sign in"}
@@ -359,12 +543,17 @@ export function AuthPage({ mode }: AuthPageProps) {
           </form>
 
           <p className="mt-6 text-center text-[13px] text-[#737e8e]">
-            {isRegister ? "Already have an account?" : "Launching a new gym or joining a team?"}{" "}
+            {isRegister
+              ? "Already have an account?"
+              : tenantGym
+                ? "Have a staff invitation code?"
+                : "Launching a new gym or joining a team?"}{" "}
             <Link
               href={isRegister ? "/login" : "/register"}
-              className="font-semibold text-[#258765] hover:text-[#1d7758]"
+              className="font-semibold hover:opacity-85"
+              style={{ color: tenantGym ? accentColor : "#258765" }}
             >
-              {isRegister ? "Sign in" : "Create workspace / Join"}
+              {isRegister ? "Sign in" : tenantGym ? "Join with invite code" : "Create workspace / Join"}
             </Link>
           </p>
         </div>

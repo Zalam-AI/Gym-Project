@@ -610,6 +610,7 @@ async function seed() {
         $set: {
           fullName: "GymOS Platform Admin",
           passwordHash: platformPasswordHash,
+          role: "platform_owner",
           permissions: [...PLATFORM_PERMISSIONS],
           status: "active",
         },

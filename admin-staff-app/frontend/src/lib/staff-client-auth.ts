@@ -88,7 +88,9 @@ export function ensureStaffFetchPatched(): void {
     }
 
     const isPublicAuth =
-      urlString.includes("/api/auth/login") || urlString.includes("/api/auth/register");
+      urlString.includes("/api/auth/login") ||
+      urlString.includes("/api/auth/register") ||
+      urlString.includes("/api/tenant");
 
     const token = isPublicAuth ? null : getStaffSessionToken();
     if (!token) {

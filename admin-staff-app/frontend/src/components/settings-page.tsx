@@ -5,8 +5,10 @@ import {
   Building2,
   Check,
   Copy,
+  Globe,
   KeyRound,
   LoaderCircle,
+  Palette,
   Plus,
   QrCode,
   ShieldCheck,
@@ -16,11 +18,21 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
+import { setStaffSessionToken } from "@/lib/staff-client-auth";
 
 type GymSettingsInfo = {
   id: string;
   name: string;
   slug: string;
+  subdomain: string;
+  customDomain: string;
+  branding: {
+    accentColor: string;
+    tagline: string;
+    logoText: string;
+  };
+  baseDomain?: string;
+  baseDomainConfigured?: boolean;
   address: string;
   phone: string;
   capacity: number;
@@ -76,6 +88,11 @@ export function SettingsPage() {
   const [phone, setPhone] = useState("");
   const [capacity, setCapacity] = useState("100");
   const [timezone, setTimezone] = useState("Africa/Cairo");
+  const [subdomain, setSubdomain] = useState("");
+  const [customDomain, setCustomDomain] = useState("");
+  const [accentColor, setAccentColor] = useState("#45b58b");
+  const [logoText, setLogoText] = useState("");
+  const [tagline, setTagline] = useState("");
   const [savingGym, setSavingGym] = useState(false);
   const [gymFeedback, setGymFeedback] = useState("");
 
@@ -109,6 +126,11 @@ export function SettingsPage() {
       setPhone(data.gym.phone);
       setCapacity(String(data.gym.capacity));
       setTimezone(data.gym.timezone || "Africa/Cairo");
+      setSubdomain(data.gym.subdomain || "");
+      setCustomDomain(data.gym.customDomain || "");
+      setAccentColor(data.gym.branding?.accentColor || "#45b58b");
+      setLogoText(data.gym.branding?.logoText || "");
+      setTagline(data.gym.branding?.tagline || "");
       setTeam(data.team ?? []);
       setInvites(data.invites ?? []);
     } catch (err) {
@@ -151,13 +173,32 @@ export function SettingsPage() {
           phone,
           capacity: Number(capacity),
           timezone,
+          subdomain,
+          customDomain,
+          branding: {
+            accentColor,
+            logoText,
+            tagline,
+          },
         }),
       });
-      const data = (await response.json()) as { error?: string; gym?: GymSettingsInfo };
+      const data = (await response.json()) as {
+        error?: string;
+        gym?: GymSettingsInfo;
+        sessionToken?: string;
+      };
       if (!response.ok || !data.gym) {
         throw new Error(data.error ?? "Failed to update gym settings.");
       }
+      if (data.sessionToken) {
+        setStaffSessionToken(data.sessionToken);
+      }
       setGym(data.gym);
+      setSubdomain(data.gym.subdomain || "");
+      setCustomDomain(data.gym.customDomain || "");
+      setAccentColor(data.gym.branding?.accentColor || "#45b58b");
+      setLogoText(data.gym.branding?.logoText || "");
+      setTagline(data.gym.branding?.tagline || "");
       setGymFeedback("Gym workspace settings saved.");
       window.dispatchEvent(new CustomEvent("gymos:gym-updated"));
       window.setTimeout(() => setGymFeedback(""), 4000);
@@ -380,6 +421,111 @@ export function SettingsPage() {
                     </label>
                   </div>
 
+                  <div className="space-y-3.5 rounded-2xl border border-[#e7edf1] bg-[#f8fafb] p-4">
+                    <div className="flex items-center gap-2 text-[12px] font-semibold text-[#243242]">
+                      <Globe size={14} className="text-[#278968]" aria-hidden="true" />
+                      <span>Gym Subdomain &amp; Custom Domain Routing</span>
+                    </div>
+
+                    <div className="grid gap-3.5 sm:grid-cols-2">
+                      <label className="block">
+                        <span className="mb-1.5 block text-[11px] font-medium text-[#354153]">
+                          Gym Subdomain
+                        </span>
+                        <div className="flex h-10 overflow-hidden rounded-xl border border-[#dce3e8] bg-white">
+                          <input
+                            required
+                            disabled={!isOwner}
+                            maxLength={48}
+                            value={subdomain}
+                            onChange={(e) =>
+                              setSubdomain(
+                                e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                              )
+                            }
+                            placeholder="ironhouse"
+                            className="min-w-0 flex-1 px-3 font-mono text-[12px] text-[#243242] outline-none disabled:bg-slate-50 disabled:text-slate-500"
+                          />
+                          <span className="flex items-center border-l border-[#e7edf1] bg-[#f4f7f9] px-2.5 font-mono text-[11px] text-[#637082]">
+                            .{gym?.baseDomain || "gymos.com"}
+                          </span>
+                        </div>
+                      </label>
+
+                      <label className="block">
+                        <span className="mb-1.5 block text-[11px] font-medium text-[#354153]">
+                          Custom Domain (Optional)
+                        </span>
+                        <input
+                          disabled={!isOwner}
+                          maxLength={253}
+                          value={customDomain}
+                          onChange={(e) => setCustomDomain(e.target.value.toLowerCase().trim())}
+                          placeholder="e.g. staff.ironhouse.eg"
+                          className="h-10 w-full rounded-xl border border-[#dce3e8] bg-white px-3 font-mono text-[12px] text-[#243242] disabled:bg-slate-50 disabled:text-slate-500"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="border-t border-[#e7edf1] pt-3">
+                      <div className="mb-2.5 flex items-center gap-2 text-[12px] font-semibold text-[#243242]">
+                        <Palette size={14} className="text-[#278968]" aria-hidden="true" />
+                        <span>Workspace Branding</span>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-[120px_110px_1fr]">
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-medium text-[#354153]">
+                            Accent Color
+                          </span>
+                          <div className="flex h-10 items-center gap-2 rounded-xl border border-[#dce3e8] bg-white px-2.5">
+                            <input
+                              type="color"
+                              disabled={!isOwner}
+                              value={
+                                /^#[0-9a-fA-F]{6}$/.test(accentColor) ? accentColor : "#45b58b"
+                              }
+                              onChange={(e) => setAccentColor(e.target.value)}
+                              className="size-6 cursor-pointer rounded border-0 bg-transparent p-0"
+                            />
+                            <span className="font-mono text-[11px] text-[#354153]">
+                              {accentColor}
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-medium text-[#354153]">
+                            Logo Badge
+                          </span>
+                          <input
+                            disabled={!isOwner}
+                            maxLength={4}
+                            value={logoText}
+                            onChange={(e) =>
+                              setLogoText(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))
+                            }
+                            placeholder="IH"
+                            className="h-10 w-full rounded-xl border border-[#dce3e8] bg-white px-3 font-mono text-[12px] font-semibold text-[#243242] disabled:bg-slate-50"
+                          />
+                        </label>
+
+                        <label className="block">
+                          <span className="mb-1 block text-[11px] font-medium text-[#354153]">
+                            Portal Tagline
+                          </span>
+                          <input
+                            disabled={!isOwner}
+                            maxLength={120}
+                            value={tagline}
+                            onChange={(e) => setTagline(e.target.value)}
+                            placeholder="Strength & conditioning club — Maadi"
+                            className="h-10 w-full rounded-xl border border-[#dce3e8] bg-white px-3 text-[12px] text-[#243242] disabled:bg-slate-50"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
                   {isOwner && (
                     <button
                       type="submit"
@@ -397,6 +543,29 @@ export function SettingsPage() {
                 {gym && (
                   <div className="mt-6 space-y-2.5 rounded-2xl border border-[#e7edf1] bg-[#f8fafb] p-4">
                     <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold text-[#516071]">
+                          Gym Workspace URL
+                        </p>
+                        <p className="truncate font-mono text-[12px] text-[#243242]">
+                          https://{gym.subdomain}.{gym.baseDomain || "gymos.com"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void copyText(
+                            "url",
+                            `https://${gym.subdomain}.${gym.baseDomain || "gymos.com"}`,
+                          )
+                        }
+                        className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[#dce3e8] bg-white px-2.5 text-[11px] font-medium text-[#354153] hover:bg-slate-50"
+                      >
+                        {copiedKey === "url" ? <Check size={13} /> : <Copy size={13} />}
+                        {copiedKey === "url" ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 border-t border-[#e7edf1] pt-2.5">
                       <div>
                         <p className="text-[11px] font-semibold text-[#516071]">Gym Slug / Code</p>
                         <p className="font-mono text-[12px] text-[#243242]">{gym.slug}</p>

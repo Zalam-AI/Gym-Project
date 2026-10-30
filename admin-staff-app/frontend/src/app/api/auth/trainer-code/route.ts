@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
       }
 
       const [gym, linkedTrainer] = await Promise.all([
-        GymModel.findOne({ _id: invite.gymId, status: { $ne: "suspended" } }).select("name slug"),
+        GymModel.findOne({ _id: invite.gymId, status: "active" }).select("name slug"),
         invite.trainerId
           ? TrainerModel.findById(invite.trainerId).select("name specialty phone +passwordHash")
           : Promise.resolve(null),
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
 
     const gym = await GymModel.findOne({
       _id: trainer.gymId,
-      status: { $ne: "suspended" },
+      status: "active",
     }).select("name slug");
     if (!gym) {
       return memberApiResponse(request, { valid: false, error: "Gym was not found." }, 404);
