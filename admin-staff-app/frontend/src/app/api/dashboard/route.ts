@@ -1,21 +1,20 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
+import {
+  addGymDays,
+  formatIsoDateInTimezone,
+  startOfGymDay,
+  startOfGymMonth,
+} from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import AttendanceModel from "gymos-admin-backend/models/attendance";
-import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import MembershipRequestModel from "gymos-admin-backend/models/membership-request";
 import PaymentModel from "gymos-admin-backend/models/payment";
-import { resolveActiveGymId } from "@/lib/gym-context";
+import { requireStaffContext } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
-
-function startOfDay(date: Date) {
-  const copy = new Date(date);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
-}
 
 function toInitials(name: string) {
   return name
@@ -27,31 +26,23 @@ function toInitials(name: string) {
 }
 
 export async function GET(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json(
-      { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
-      { status: 500 },
-    );
-  }
-
   try {
-    await connectToDatabase();
-    const gym = await GymModel.findById(gymId).select("name slug");
-    if (!gym) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
+    const auth = await requireStaffContext(request);
+    if (auth.response) {
+      return auth.response;
     }
 
+    await connectToDatabase();
+    const { gymId, gym } = auth.ctx;
+    const tz = gym.timezone;
+
     const now = new Date();
-    const today = startOfDay(now);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const sevenDaysAgo = new Date(today);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const today = startOfGymDay(now, tz);
+    const tomorrow = addGymDays(today, 1, tz);
+    const yesterday = addGymDays(today, -1, tz);
+    const sevenDaysAgo = addGymDays(today, -6, tz);
+    const monthStart = startOfGymMonth(now, tz, 0);
+    const lastMonthStart = startOfGymMonth(now, tz, -1);
 
     const [members, memberships, payments, recentCheckIns, currentlyInside, pendingSubRequests] =
       await Promise.all([
@@ -63,7 +54,12 @@ export async function GET(request: Request) {
           .lean(),
         AttendanceModel.countDocuments({ gymId, status: "checked-in" }),
         MembershipRequestModel.find({ gymId, status: "pending" })
-          .populate({ path: "memberId", model: MemberModel, select: "fullName" })
+          .populate({
+            path: "memberId",
+            model: MemberModel,
+            match: { $or: [{ gymId }, { gymId: { $exists: false } }, { gymId: null }] },
+            select: "fullName",
+          })
           .sort({ createdAt: -1 })
           .lean(),
       ]);
@@ -122,25 +118,25 @@ export async function GET(request: Request) {
       )
       .reduce((sum, item) => sum + item.amount, 0);
 
-    // Build 7-day attendance series (oldest -> today)
-    const weekdayFormatter = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+    const weekdayFormatter = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      timeZone: tz,
+    });
     const attendanceSeries = Array.from({ length: 7 }, (_, index) => {
-      const dayStart = new Date(sevenDaysAgo);
-      dayStart.setDate(sevenDaysAgo.getDate() + index);
-      const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayStart.getDate() + 1);
+      const dayStart = addGymDays(sevenDaysAgo, index, tz);
+      const dayEnd = addGymDays(sevenDaysAgo, index + 1, tz);
       const count = recentCheckIns.filter((item) => {
         const dt = new Date(item.checkInTime);
         return dt >= dayStart && dt < dayEnd;
       }).length;
+      const midDay = new Date(dayStart.getTime() + 12 * 3600_000);
       return {
-        date: dayStart.toISOString().slice(0, 10),
-        label: weekdayFormatter.format(dayStart),
+        date: formatIsoDateInTimezone(midDay, tz),
+        label: weekdayFormatter.format(midDay),
         count,
       };
     });
 
-    // Build real actionable "Needs attention" items
     type AttentionItem = {
       id: string;
       name: string;
@@ -170,7 +166,7 @@ export async function GET(request: Request) {
       const id = String(member._id);
       const membership = latestMembershipByMember.get(id);
       if (!membership) continue;
-      const expiry = startOfDay(new Date(membership.expiryDate));
+      const expiry = startOfGymDay(new Date(membership.expiryDate), tz);
       const daysUntilExpiry = Math.round((expiry.getTime() - today.getTime()) / 86_400_000);
 
       if (daysUntilExpiry < 0 && daysUntilExpiry >= -30) {
@@ -225,9 +221,11 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       gym: {
-        id: gym._id.toString(),
+        id: gym.id,
         name: gym.name,
         slug: gym.slug,
+        capacity: gym.capacity,
+        timezone: gym.timezone,
       },
       metrics: {
         activeMembers,

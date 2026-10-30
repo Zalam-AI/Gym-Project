@@ -1,5 +1,5 @@
 import dns from "node:dns";
-import mongoose, { type Mongoose } from "mongoose";
+import mongoose, { type ClientSession, type Mongoose } from "mongoose";
 
 type MongooseCache = {
   conn: Mongoose | null;
@@ -90,7 +90,9 @@ export async function connectToDatabase(): Promise<Mongoose> {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
-      if (uri.startsWith("mongodb+srv://") || dnsServers.length > 0) {
+      // Preserve default system/VPC DNS on the initial attempt unless custom DNS servers
+      // were explicitly configured; only switch to public fallback resolvers on SRV retry.
+      if (dnsServers.length > 0 || (attempt > 0 && uri.startsWith("mongodb+srv://"))) {
         dns.setServers([resolvers[attempt % resolvers.length]]);
       }
       try {
@@ -129,3 +131,44 @@ export async function connectToDatabase(): Promise<Mongoose> {
 
   return cache.conn;
 }
+
+function isUnsupportedTransactionError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error && typeof error.code === "number" ? error.code : 0;
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  return (
+    code === 20 || // IllegalOperation (standalone mongod without replica set)
+    code === 263 ||
+    message.includes("Transaction numbers are only allowed on a replica set") ||
+    message.includes("transactions are not supported")
+  );
+}
+
+/**
+ * Executes `work` inside a MongoDB ACID transaction when connected to a Replica Set
+ * (e.g., MongoDB Atlas), and falls back cleanly on standalone local/dev MongoDB instances.
+ */
+export async function runInTransactionOrFallback<T>(
+  work: (session: ClientSession | null) => Promise<T>,
+): Promise<T> {
+  const conn = await connectToDatabase();
+  let session: ClientSession | null = null;
+  try {
+    session = await conn.startSession();
+    let result!: T;
+    await session.withTransaction(async () => {
+      result = await work(session);
+    });
+    return result;
+  } catch (error) {
+    if (isUnsupportedTransactionError(error)) {
+      return work(null);
+    }
+    throw error;
+  } finally {
+    if (session) {
+      await session.endSession().catch(() => undefined);
+    }
+  }
+}
+

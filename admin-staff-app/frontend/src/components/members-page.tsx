@@ -46,12 +46,6 @@ type NewMemberInput = {
   paymentStatus: PaymentStatus;
 };
 
-const defaultPlans: PlanOption[] = [
-  { id: "default-1", name: "1 Month Regular", price: 1800, durationMonths: 1 },
-  { id: "default-3", name: "3 Month Saver", price: 4500, durationMonths: 3 },
-  { id: "default-12", name: "VIP Annual", price: 18000, durationMonths: 12 },
-];
-
 function toLocalDateInputValue(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -168,22 +162,23 @@ function AddMemberModal({
   isSubmitting,
   submitError,
 }: AddMemberModalProps) {
-  const availablePlans = plans.length > 0 ? plans : defaultPlans;
-  const initialPlan = availablePlans[0];
+  const initialPlan = plans[0] ?? null;
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [plan, setPlan] = useState(initialPlan.name);
-  const [price, setPrice] = useState(String(initialPlan.price));
+  const [plan, setPlan] = useState(initialPlan?.name ?? "");
+  const [price, setPrice] = useState(initialPlan ? String(initialPlan.price) : "");
   const [startDate, setStartDate] = useState(dateOffset(0));
-  const [duration, setDuration] = useState(String(initialPlan.durationMonths));
+  const [duration, setDuration] = useState(
+    initialPlan ? String(initialPlan.durationMonths) : "1",
+  );
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash");
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("Paid");
 
   function handlePlanChange(selectedName: string) {
     setPlan(selectedName);
-    const matching = availablePlans.find((item) => item.name === selectedName);
+    const matching = plans.find((item) => item.name === selectedName);
     if (matching) {
       setPrice(String(matching.price));
       setDuration(String(matching.durationMonths));
@@ -345,19 +340,32 @@ function AddMemberModal({
               >
                 Membership plan
               </label>
-              <select
-                id="member-plan"
-                name="plan"
-                value={plan}
-                onChange={(event) => handlePlanChange(event.target.value)}
-                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
-              >
-                {availablePlans.map((option) => (
-                  <option key={option.id} value={option.name}>
-                    {option.name}
-                  </option>
-                ))}
-              </select>
+              {plans.length > 0 ? (
+                <select
+                  id="member-plan"
+                  name="plan"
+                  value={plan}
+                  onChange={(event) => handlePlanChange(event.target.value)}
+                  className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+                >
+                  {plans.map((option) => (
+                    <option key={option.id} value={option.name}>
+                      {option.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id="member-plan"
+                  name="plan"
+                  required
+                  maxLength={80}
+                  value={plan}
+                  onChange={(event) => setPlan(event.target.value)}
+                  placeholder="Enter plan name"
+                  className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+                />
+              )}
             </div>
             <div>
               <label

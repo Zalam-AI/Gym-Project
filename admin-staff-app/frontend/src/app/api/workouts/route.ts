@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
-import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import WorkoutPlanModel from "gymos-admin-backend/models/workout-plan";
-import { resolveActiveGymId } from "@/lib/gym-context";
+import { requireStaffContext } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
 
@@ -42,16 +41,19 @@ function serializePlan(plan: {
 }
 
 export async function GET(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
+  const auth = await requireStaffContext(request);
+  if (auth.response) return auth.response;
+  const { gymId } = auth.ctx;
 
   try {
     await connectToDatabase();
-    if (!(await GymModel.exists({ _id: gymId }))) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
-    }
     const plans = await WorkoutPlanModel.find({ gymId })
-      .populate({ path: "assignedMemberIds", model: MemberModel, select: "fullName" })
+      .populate({
+        path: "assignedMemberIds",
+        model: MemberModel,
+        match: { gymId },
+        select: "fullName",
+      })
       .sort({ title: 1 })
       .lean();
     const workoutPlans = plans.map((plan) => {
@@ -70,17 +72,16 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
   const parsed = await parseBody(request);
+  const auth = await requireStaffContext(request, parsed.input ?? null);
+  if (auth.response) return auth.response;
+  const { gymId } = auth.ctx;
+
   if (!parsed.input) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const input = parsed.input;
 
   try {
     await connectToDatabase();
-    if (!(await GymModel.exists({ _id: gymId }))) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
-    }
 
     if (input.action === "assign") {
       const workoutPlanId = typeof input.workoutPlanId === "string" ? input.workoutPlanId : "";

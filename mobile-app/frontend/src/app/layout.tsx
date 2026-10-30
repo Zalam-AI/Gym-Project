@@ -1,9 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GymOS — Member App",
-  description: "Your GymOS membership pass, workouts, and attendance.",
+  title: "GymOS Mobile",
+  description: "Your digital gym pass, coaching schedule, and workouts.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#172433",
 };
 
 export default function RootLayout({
@@ -13,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

@@ -2,52 +2,37 @@ import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import GymModel from "gymos-admin-backend/models/gym";
 import { MEMBER_SESSION_COOKIE } from "@/lib/member-session";
+import { getAllowedOriginsSet, isPreviewModeEnabled, isPreviewOriginUrl } from "@/lib/security";
 
 export function getAllowedMemberOrigins() {
-  const configured = process.env.GYMOS_MEMBER_APP_ORIGINS
-    ?.split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-  return new Set([
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    ...(configured ?? []),
-  ]);
-}
-
-function isPreviewDevOrigin(origin: string): boolean {
-  if (process.env.NODE_ENV === "production" && process.env.GYMOS_ALLOW_PREVIEW_ORIGINS !== "1") {
-    return false;
-  }
-  try {
-    const url = new URL(origin);
-    return (
-      url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname.endsWith(".e2b.app")
-    );
-  } catch {
-    return false;
-  }
+  return getAllowedOriginsSet();
 }
 
 export function isAllowedMemberOrigin(request: Request) {
-  const origin = request.headers.get("origin");
+  const origin = request.headers.get("origin")?.trim().replace(/\/+$/, "");
   if (!origin) return true;
   try {
     if (origin === new URL(request.url).origin) return true;
   } catch {
     // Ignore malformed request URL and check explicit allowlist.
   }
-  return getAllowedMemberOrigins().has(origin) || isPreviewDevOrigin(origin);
+  const forwardedHost =
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+    request.headers.get("host")?.trim();
+  if (forwardedHost) {
+    const proto =
+      request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || "https";
+    if (origin === `${proto}://${forwardedHost}` || origin === `http://${forwardedHost}`) {
+      return true;
+    }
+  }
+  return getAllowedMemberOrigins().has(origin) || isPreviewOriginUrl(origin);
 }
 
 export function memberApiResponse(request: Request, body: unknown, status = 200) {
   const response = NextResponse.json(body, { status });
-  const origin = request.headers.get("origin");
-  if (origin && (getAllowedMemberOrigins().has(origin) || isPreviewDevOrigin(origin))) {
+  const origin = request.headers.get("origin")?.trim().replace(/\/+$/, "");
+  if (origin && (getAllowedMemberOrigins().has(origin) || isPreviewOriginUrl(origin))) {
     response.headers.set("Access-Control-Allow-Origin", origin);
     response.headers.set("Access-Control-Allow-Credentials", "true");
     response.headers.set("Vary", "Origin");
@@ -56,14 +41,14 @@ export function memberApiResponse(request: Request, body: unknown, status = 200)
 }
 
 export function memberApiOptions(request: Request) {
-  const origin = request.headers.get("origin");
+  const origin = request.headers.get("origin")?.trim().replace(/\/+$/, "");
   const headers = new Headers({
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-GymOS-Session",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "600",
   });
-  if (origin && (getAllowedMemberOrigins().has(origin) || isPreviewDevOrigin(origin))) {
+  if (origin && (getAllowedMemberOrigins().has(origin) || isPreviewOriginUrl(origin))) {
     headers.set("Access-Control-Allow-Origin", origin);
     headers.set("Vary", "Origin");
   }
@@ -105,17 +90,18 @@ export function buildPhoneCandidates(rawPhone: string): string[] {
   return [...candidates].filter(Boolean);
 }
 
+/**
+ * Resolves an explicit gym code or ObjectId. Never falls back to an arbitrary or global gym.
+ */
 export async function resolveMemberGym(gymCode: unknown) {
   const code = typeof gymCode === "string" ? gymCode.trim() : "";
-  if (code) {
-    if (Types.ObjectId.isValid(code)) return GymModel.findById(code);
-    return GymModel.findOne({ slug: code.toLowerCase() });
+  if (!code) {
+    return null;
   }
-  const configuredGymId = process.env.GYMOS_GYM_ID;
-  if (configuredGymId && Types.ObjectId.isValid(configuredGymId)) {
-    return GymModel.findById(configuredGymId);
+  if (Types.ObjectId.isValid(code)) {
+    return GymModel.findOne({ _id: code, status: { $ne: "suspended" } });
   }
-  return GymModel.findOne().sort({ createdAt: 1 });
+  return GymModel.findOne({ slug: code.toLowerCase(), status: { $ne: "suspended" } });
 }
 
 function getMemberCookieOptions(request: Request | undefined, maxAge: number) {
@@ -124,18 +110,24 @@ function getMemberCookieOptions(request: Request | undefined, maxAge: number) {
     Boolean(request?.headers.get("origin")?.startsWith("https://")) ||
     Boolean(request?.url.startsWith("https://"));
 
+  const useCrossSitePreviewCookie = isHttps && isPreviewModeEnabled();
+
   return {
     httpOnly: true,
     secure: isHttps,
-    sameSite: (isHttps ? "none" : "lax") as "none" | "lax",
-    ...(isHttps ? { partitioned: true } : {}),
+    sameSite: (useCrossSitePreviewCookie ? "none" : "lax") as "none" | "lax",
+    ...(useCrossSitePreviewCookie ? { partitioned: true } : {}),
     path: "/",
     maxAge,
   };
 }
 
 export function setMemberSessionCookie(response: NextResponse, token: string, request?: Request) {
-  response.cookies.set(MEMBER_SESSION_COOKIE, token, getMemberCookieOptions(request, 7 * 24 * 60 * 60));
+  response.cookies.set(
+    MEMBER_SESSION_COOKIE,
+    token,
+    getMemberCookieOptions(request, 7 * 24 * 60 * 60),
+  );
 }
 
 export function clearMemberSessionCookie(response: NextResponse, request?: Request) {

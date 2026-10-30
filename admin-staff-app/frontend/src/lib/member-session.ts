@@ -1,7 +1,11 @@
 export const MEMBER_SESSION_COOKIE = "gymos_member_session";
 export const MEMBER_SESSION_DURATION_SECONDS = 7 * 24 * 60 * 60;
+export const MEMBER_SESSION_HEADER = "x-gymos-session";
+
+const MOBILE_SIGNING_DOMAIN = "mobile";
 
 export type MemberAccountSession = {
+  typ: "mobile";
   memberId: string;
   gymId: string;
   role: "member";
@@ -9,6 +13,7 @@ export type MemberAccountSession = {
 };
 
 export type TrainerAccountSession = {
+  typ: "mobile";
   trainerId: string;
   gymId: string;
   role: "trainer";
@@ -59,12 +64,17 @@ function getSessionSecret() {
 async function signSessionPayload(payload: MemberSession): Promise<string> {
   const payloadPart = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
   const key = await getSigningKey(getSessionSecret());
-  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadPart));
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${MOBILE_SIGNING_DOMAIN}.${payloadPart}`),
+  );
   return `${payloadPart}.${encodeBase64Url(new Uint8Array(signature))}`;
 }
 
 export async function createMemberSessionToken(memberId: string, gymId: string) {
   return signSessionPayload({
+    typ: "mobile",
     memberId,
     gymId,
     role: "member",
@@ -74,14 +84,13 @@ export async function createMemberSessionToken(memberId: string, gymId: string) 
 
 export async function createTrainerSessionToken(trainerId: string, gymId: string) {
   return signSessionPayload({
+    typ: "mobile",
     trainerId,
     gymId,
     role: "trainer",
     exp: Math.floor(Date.now() / 1000) + MEMBER_SESSION_DURATION_SECONDS,
   });
 }
-
-export const MEMBER_SESSION_HEADER = "x-gymos-session";
 
 export function getMemberTokenFromRequest(
   request: Request,
@@ -91,11 +100,13 @@ export function getMemberTokenFromRequest(
   if (customHeader) {
     return customHeader;
   }
-  try {
-    const queryToken = new URL(request.url).searchParams.get("_gst")?.trim();
-    if (queryToken) return queryToken;
-  } catch {
-    // Ignore malformed URL.
+  if (process.env.GYMOS_ALLOW_PREVIEW_ORIGINS === "1") {
+    try {
+      const queryToken = new URL(request.url).searchParams.get("_gst")?.trim();
+      if (queryToken) return queryToken;
+    } catch {
+      // Ignore malformed URL.
+    }
   }
   if (cookieToken) return cookieToken;
   const rawCookie = request.headers.get("cookie");
@@ -118,17 +129,26 @@ export async function verifyMemberSessionToken(
     const [payloadPart, signaturePart, ...extra] = token.split(".");
     if (!payloadPart || !signaturePart || extra.length > 0) return null;
     const key = await getSigningKey(getSessionSecret());
-    const expectedSignature = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      new TextEncoder().encode(payloadPart),
+    const domainSig = encodeBase64Url(
+      new Uint8Array(
+        await crypto.subtle.sign(
+          "HMAC",
+          key,
+          new TextEncoder().encode(`${MOBILE_SIGNING_DOMAIN}.${payloadPart}`),
+        ),
+      ),
     );
-    const expectedSignaturePart = encodeBase64Url(new Uint8Array(expectedSignature));
-    if (!constantTimeEqual(expectedSignaturePart, signaturePart)) return null;
+
+    if (!constantTimeEqual(domainSig, signaturePart)) {
+      return null;
+    }
 
     const payload: unknown = JSON.parse(new TextDecoder().decode(decodeBase64Url(payloadPart)));
     if (!payload || typeof payload !== "object") return null;
     const session = payload as Record<string, unknown>;
+    if (session.typ !== "mobile") {
+      return null;
+    }
     if (
       typeof session.gymId !== "string" ||
       typeof session.exp !== "number" ||
@@ -139,6 +159,7 @@ export async function verifyMemberSessionToken(
 
     if (session.role === "member" && typeof session.memberId === "string") {
       return {
+        typ: "mobile",
         role: "member",
         memberId: session.memberId,
         gymId: session.gymId,
@@ -148,6 +169,7 @@ export async function verifyMemberSessionToken(
 
     if (session.role === "trainer" && typeof session.trainerId === "string") {
       return {
+        typ: "mobile",
         role: "trainer",
         trainerId: session.trainerId,
         gymId: session.gymId,

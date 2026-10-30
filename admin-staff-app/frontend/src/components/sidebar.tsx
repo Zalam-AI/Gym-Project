@@ -3,9 +3,11 @@
 import {
   Activity,
   BadgeDollarSign,
+  Building2,
   Dumbbell,
   LayoutDashboard,
   NotebookTabs,
+  Settings,
   UsersRound,
   X,
 } from "lucide-react";
@@ -17,7 +19,8 @@ export type NavigationPage =
   | "Memberships"
   | "Attendance"
   | "Payments"
-  | "Trainers";
+  | "Trainers"
+  | "Settings";
 
 const navigation: Array<{
   id: NavigationPage;
@@ -31,15 +34,18 @@ const navigation: Array<{
   { id: "Attendance", label: "Attendance", href: "/attendance", icon: Activity },
   { id: "Payments", label: "Payments", href: "/payments", icon: BadgeDollarSign },
   { id: "Trainers", label: "Trainers & Workouts", href: "/trainers", icon: Dumbbell },
+  { id: "Settings", label: "Gym & Team", href: "/settings", icon: Settings },
 ];
 
 type SidebarProps = {
   activePage: NavigationPage;
   open: boolean;
   onClose: () => void;
+  gymName?: string;
+  gymSlug?: string;
 };
 
-export function Sidebar({ activePage, open, onClose }: SidebarProps) {
+export function Sidebar({ activePage, open, onClose, gymName, gymSlug }: SidebarProps) {
   return (
     <>
       {open && (
@@ -56,7 +62,7 @@ export function Sidebar({ activePage, open, onClose }: SidebarProps) {
           open ? "visible translate-x-0" : "invisible -translate-x-full md:visible md:translate-x-0"
         } md:w-[220px] md:px-3 lg:w-[248px] lg:px-4`}
       >
-        <div className="mb-9 flex items-center justify-between px-2">
+        <div className="mb-8 flex items-center justify-between px-2">
           <Link
             href="/"
             className="flex items-center gap-3 rounded-lg"
@@ -107,13 +113,26 @@ export function Sidebar({ activePage, open, onClose }: SidebarProps) {
         </nav>
 
         <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.045] p-4">
-          <div className="mb-3 grid size-8 place-items-center rounded-lg bg-[#28394a] text-[#77d0aa]">
-            <Activity size={16} aria-hidden="true" />
+          <div className="mb-2.5 flex items-center gap-2">
+            <span className="grid size-7 place-items-center rounded-lg bg-[#28394a] text-[#77d0aa]">
+              <Building2 size={14} aria-hidden="true" />
+            </span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#77d0aa]">
+              Active Club
+            </span>
           </div>
-          <p className="text-[12px] font-semibold text-white">Your gym, at a glance</p>
-          <p className="mt-1 text-[11px] leading-5 text-slate-400">
-            The essentials to keep your club moving.
+          <p className="truncate text-[12px] font-semibold text-white">
+            {gymName || "GymOS Workspace"}
           </p>
+          {gymSlug ? (
+            <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">
+              {gymSlug}
+            </p>
+          ) : (
+            <p className="mt-1 text-[11px] leading-5 text-slate-400">
+              Multi-tenant club workspace
+            </p>
+          )}
         </div>
       </aside>
     </>

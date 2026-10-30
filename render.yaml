@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: gymos-web-api
+    runtime: node
+    plan: free # Change to "starter" for 24/7 always-on production (no idle cold starts)
+    buildCommand: npm ci --include=dev && npm run build:admin
+    startCommand: npm run start:admin
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: GYMOS_ALLOW_PREVIEW_ORIGINS
+        value: "0"
+      - key: GYMOS_SESSION_SECRET
+        generateValue: true
+      - key: MONGODB_URI
+        sync: false
+      - key: GYMOS_STAFF_APP_ORIGINS
+        sync: false
+      - key: GYMOS_MEMBER_APP_ORIGINS
+        sync: false

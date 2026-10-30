@@ -4,9 +4,14 @@ const SESSION_HEADER = "X-GymOS-Session";
 let memoryStaffToken: string | null = null;
 let fetchPatched = false;
 
+function isSandboxedPreviewHost(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname.endsWith(".e2b.app");
+}
+
 export function getStaffSessionToken(): string | null {
   if (memoryStaffToken) return memoryStaffToken;
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined" || !isSandboxedPreviewHost()) return null;
   try {
     const fromSession = window.sessionStorage.getItem(STAFF_TOKEN_KEY);
     if (fromSession) {
@@ -32,8 +37,8 @@ export function setStaffSessionToken(token: string | undefined | null, persist =
   const normalized = token?.trim() || null;
   memoryStaffToken = normalized;
   if (typeof window === "undefined") return;
-  if (!normalized) {
-    clearStaffSessionToken();
+  if (!normalized || !isSandboxedPreviewHost()) {
+    if (!normalized) clearStaffSessionToken();
     return;
   }
   try {
@@ -87,7 +92,10 @@ export function ensureStaffFetchPatched(): void {
 
     const token = isPublicAuth ? null : getStaffSessionToken();
     if (!token) {
-      return originalFetch(input, init);
+      return originalFetch(input, {
+        ...init,
+        credentials: init?.credentials ?? "same-origin",
+      });
     }
 
     const isSameOriginApi =
@@ -99,13 +107,14 @@ export function ensureStaffFetchPatched(): void {
     }
 
     const headers = new Headers(
-      init?.headers ?? (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined),
+      init?.headers ??
+        (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined),
     );
     if (!headers.has(SESSION_HEADER)) {
       headers.set(SESSION_HEADER, token);
     }
     let target: RequestInfo | URL = input;
-    if (typeof input === "string" && input.startsWith("/api/")) {
+    if (isSandboxedPreviewHost() && typeof input === "string" && input.startsWith("/api/")) {
       const sep = input.includes("?") ? "&" : "?";
       target = `${input}${sep}_gst=${encodeURIComponent(token)}`;
     }

@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "test:isolation": "tsx --test tests/multi-tenant-isolation.test.ts"
   },
   "exports": {
     "./*": "./*.ts"

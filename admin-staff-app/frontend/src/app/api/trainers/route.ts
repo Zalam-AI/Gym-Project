@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
+import { startOfGymDay } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import { generateTrainerInviteCode } from "gymos-admin-backend/lib/trainer-code";
-import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import TrainerModel from "gymos-admin-backend/models/trainer";
 import TrainerInviteModel from "gymos-admin-backend/models/trainer-invite";
 import TrainingSessionModel from "gymos-admin-backend/models/training-session";
-import { resolveActiveGymId } from "@/lib/gym-context";
+import { requireStaffContext } from "@/lib/gym-context";
 import { normalizePhone } from "@/lib/member-auth";
 
 export const runtime = "nodejs";
@@ -33,39 +33,53 @@ async function createUniqueTrainerCode(): Promise<string> {
 }
 
 export async function GET(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json(
-      { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
-      { status: 500 },
-    );
+  const auth = await requireStaffContext(request);
+  if (auth.response) {
+    return auth.response;
   }
+  const { gymId, gym } = auth.ctx;
 
   try {
     await connectToDatabase();
-    if (!(await GymModel.exists({ _id: gymId }))) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
-    }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = startOfGymDay(new Date(), gym.timezone);
 
     const [records, members, inviteRecords, sessionRecords] = await Promise.all([
       TrainerModel.find({ gymId })
         .select("+passwordHash")
-        .populate({ path: "assignedMemberIds", model: MemberModel, select: "fullName" })
+        .populate({
+          path: "assignedMemberIds",
+          model: MemberModel,
+          match: { gymId },
+          select: "fullName",
+        })
         .sort({ name: 1 })
         .lean(),
       MemberModel.find({ gymId }).select("fullName phone").sort({ fullName: 1 }).lean(),
       TrainerInviteModel.find({ gymId })
-        .populate({ path: "trainerId", model: TrainerModel, select: "name" })
-        .populate({ path: "claimedByTrainerId", model: TrainerModel, select: "name" })
+        .populate({ path: "trainerId", model: TrainerModel, match: { gymId }, select: "name" })
+        .populate({
+          path: "claimedByTrainerId",
+          model: TrainerModel,
+          match: { gymId },
+          select: "name",
+        })
         .sort({ createdAt: -1 })
         .limit(30)
         .lean(),
       TrainingSessionModel.find({ gymId })
-        .populate({ path: "trainerId", model: TrainerModel, select: "name specialty" })
-        .populate({ path: "memberId", model: MemberModel, select: "fullName phone" })
+        .populate({
+          path: "trainerId",
+          model: TrainerModel,
+          match: { gymId },
+          select: "name specialty",
+        })
+        .populate({
+          path: "memberId",
+          model: MemberModel,
+          match: { gymId },
+          select: "fullName phone",
+        })
         .sort({ startsAt: 1 })
         .limit(50)
         .lean(),
@@ -179,22 +193,18 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json(
-      { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
-      { status: 500 },
-    );
-  }
   const parsed = await parseBody(request);
+  const auth = await requireStaffContext(request, parsed.input ?? null);
+  if (auth.response) {
+    return auth.response;
+  }
+  const { gymId } = auth.ctx;
+
   if (!parsed.input) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const input = parsed.input;
 
   try {
     await connectToDatabase();
-    if (!(await GymModel.exists({ _id: gymId }))) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
-    }
 
     if (input.action === "assign") {
       const trainerId = typeof input.trainerId === "string" ? input.trainerId : "";

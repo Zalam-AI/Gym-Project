@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import TrainerModel from "gymos-admin-backend/models/trainer";
 import {
@@ -15,8 +16,12 @@ import {
   resolveMemberGym,
   setMemberSessionCookie,
 } from "@/lib/member-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
+
+const DUMMY_BCRYPT_HASH =
+  "$2b$10$CwTycUXWue0Thq9StjUM0uJ8h0R5wB6s5c/4G6sT2f5m2uJ1e5S6a";
 
 export async function OPTIONS(request: Request) {
   return memberApiOptions(request);
@@ -26,6 +31,22 @@ export async function POST(request: Request) {
   if (!isAllowedMemberOrigin(request)) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
+
+  const rate = checkRateLimit(request, {
+    namespace: "mobile-login",
+    limit: 20,
+    windowMs: 10 * 60_000,
+  });
+  if (!rate.allowed) {
+    const res = memberApiResponse(
+      request,
+      { error: "Too many sign-in attempts. Please wait a few minutes and try again." },
+      429,
+    );
+    res.headers.set("Retry-After", String(rate.retryAfterSeconds));
+    return res;
+  }
+
   const parsed = await parseMemberAuthBody(request);
   if (!parsed.input) {
     return memberApiResponse(request, { error: parsed.error }, 400);
@@ -80,80 +101,165 @@ export async function POST(request: Request) {
             .sort({ createdAt: -1 }),
     ]);
 
+    let checkedAnyPassword = false;
+
     // Check Trainer credentials first
+    const matchedTrainers = [];
     for (const trainer of trainers) {
       if (!trainer.passwordHash) continue;
+      checkedAnyPassword = true;
       const validTrainerPassword = await bcrypt.compare(password, trainer.passwordHash);
       if (validTrainerPassword) {
-        if (trainer.status === "inactive") {
-          return memberApiResponse(
-            request,
-            { error: "This trainer account is currently inactive. Contact the gym admin." },
-            403,
-          );
-        }
-        const token = await createTrainerSessionToken(
-          trainer._id.toString(),
-          trainer.gymId.toString(),
-        );
-        const response = memberApiResponse(request, {
-          role: "trainer",
-          sessionToken: token,
-          trainer: {
-            id: trainer._id.toString(),
-            name: trainer.name,
-            specialty: trainer.specialty,
-            email: trainer.email,
-          },
-        });
-        setMemberSessionCookie(response, token, request);
-        return response;
+        matchedTrainers.push(trainer);
       }
+    }
+
+    if (matchedTrainers.length > 0) {
+      const activeTrainerEntries = [];
+      for (const candidate of matchedTrainers) {
+        if (candidate.status === "inactive") continue;
+        const gym = await GymModel.findOne({
+          _id: candidate.gymId,
+          status: "active",
+        }).select("_id");
+        if (gym) {
+          activeTrainerEntries.push(candidate);
+        }
+      }
+
+      if (activeTrainerEntries.length === 0) {
+        return memberApiResponse(
+          request,
+          {
+            error:
+              "This trainer account or gym workspace is currently inactive. Contact the gym admin.",
+          },
+          403,
+        );
+      }
+
+      const distinctTrainerGyms = new Set(
+        activeTrainerEntries.map((t) => String(t.gymId)),
+      );
+      if (!explicitGym && distinctTrainerGyms.size > 1) {
+        return memberApiResponse(
+          request,
+          {
+            error:
+              "Multiple gym trainer profiles match this login. Enter your gym code/slug to select your gym.",
+          },
+          409,
+        );
+      }
+
+      const trainer = activeTrainerEntries[0];
+      const token = await createTrainerSessionToken(
+        trainer._id.toString(),
+        trainer.gymId.toString(),
+      );
+      const response = memberApiResponse(request, {
+        role: "trainer",
+        sessionToken: token,
+        trainer: {
+          id: trainer._id.toString(),
+          name: trainer.name,
+          specialty: trainer.specialty,
+          email: trainer.email,
+        },
+      });
+      setMemberSessionCookie(response, token, request);
+      return response;
     }
 
     // Check Member credentials (supports both gym-enrolled and new unaffiliated members)
+    const matchedMembers = [];
     for (const member of members) {
       if (!member.passwordHash) continue;
+      checkedAnyPassword = true;
       const validMemberPassword = await bcrypt.compare(password, member.passwordHash);
       if (validMemberPassword) {
-        const memberGymId = member.gymId ? member.gymId.toString() : "";
-        const token = await createMemberSessionToken(member._id.toString(), memberGymId);
-        const response = memberApiResponse(request, {
-          role: "member",
-          sessionToken: token,
-          member: { id: member._id.toString(), name: member.fullName, email: member.email },
-        });
-        setMemberSessionCookie(response, token, request);
-        return response;
+        matchedMembers.push(member);
       }
     }
 
-    const unclaimedTrainer = trainers.find((t) => !t.passwordHash);
-    const hasPasswordMember = members.some((m) => Boolean(m.passwordHash));
-    if (unclaimedTrainer && !hasPasswordMember) {
-      return memberApiResponse(
-        request,
-        {
-          error:
-            "Your trainer profile exists, but no password is set yet. Switch to Create Account → Trainer and use the invite code from your gym admin.",
-        },
-        401,
+    if (matchedMembers.length > 0) {
+      const activeGymMembers = [];
+      for (const candidate of matchedMembers) {
+        if (candidate.gymId) {
+          const activeGym = await GymModel.exists({
+            _id: candidate.gymId,
+            status: "active",
+          });
+          if (activeGym && candidate.status !== "suspended") {
+            activeGymMembers.push(candidate);
+          }
+        }
+      }
+
+      const distinctMemberGyms = new Set(
+        activeGymMembers.map((m) => String(m.gymId)),
       );
+      if (!explicitGym && distinctMemberGyms.size > 1) {
+        return memberApiResponse(
+          request,
+          {
+            error:
+              "Multiple gym memberships match this login. Enter your gym code/slug to select your gym.",
+          },
+          409,
+        );
+      }
+
+      const chosenMember = activeGymMembers[0] ?? matchedMembers[0];
+      if (chosenMember.status === "suspended") {
+        return memberApiResponse(
+          request,
+          { error: "This member account is currently suspended. Contact your gym." },
+          403,
+        );
+      }
+      if (chosenMember.gymId) {
+        const gymActive = await GymModel.exists({
+          _id: chosenMember.gymId,
+          status: "active",
+        });
+        if (!gymActive) {
+          return memberApiResponse(
+            request,
+            { error: "This gym workspace is currently unavailable." },
+            403,
+          );
+        }
+      }
+
+      const memberGymId = chosenMember.gymId ? chosenMember.gymId.toString() : "";
+      const token = await createMemberSessionToken(chosenMember._id.toString(), memberGymId);
+      const response = memberApiResponse(request, {
+        role: "member",
+        sessionToken: token,
+        member: {
+          id: chosenMember._id.toString(),
+          name: chosenMember.fullName,
+          email: chosenMember.email,
+        },
+      });
+      setMemberSessionCookie(response, token, request);
+      return response;
     }
 
-    const unclaimedMember = members.find((m) => !m.passwordHash);
-    if (unclaimedMember && !hasPasswordMember) {
-      return memberApiResponse(
-        request,
-        {
-          error:
-            "Your gym profile exists, but no password has been set yet. Switch to Create Account to activate your login.",
-        },
-        401,
-      );
+    if (!checkedAnyPassword) {
+      // Equalize response timing when identifier does not exist or has no password set
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
     }
 
-    return memberApiResponse(request, { error: "Invalid credentials." }, 401);
+    return memberApiResponse(
+      request,
+      {
+        error:
+          "Invalid credentials. If your gym added you at reception without a password, tap Create an account to activate your login.",
+      },
+      401,
+    );
   } catch (error) {
     console.error("Mobile login failed:", error);
     return memberApiResponse(request, { error: "Unable to sign in at this time." }, 503);

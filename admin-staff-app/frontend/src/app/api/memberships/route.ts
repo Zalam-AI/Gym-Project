@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
-import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import MembershipPlanModel from "gymos-admin-backend/models/membership-plan";
 import PaymentModel from "gymos-admin-backend/models/payment";
-import { resolveActiveGymId } from "@/lib/gym-context";
+import { requireStaffContext } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
 
@@ -64,21 +63,24 @@ function serializePlan(plan: {
 }
 
 export async function GET(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
+  const auth = await requireStaffContext(request);
+  if (auth.response) {
+    return auth.response;
   }
+  const { gymId } = auth.ctx;
 
   try {
     await connectToDatabase();
-    if (!(await GymModel.exists({ _id: gymId }))) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
-    }
 
     const [plans, memberships] = await Promise.all([
       MembershipPlanModel.find({ gymId, active: true }).sort({ createdAt: 1 }),
       MembershipModel.find({ gymId })
-        .populate({ path: "memberId", model: MemberModel, select: "fullName status" })
+        .populate({
+          path: "memberId",
+          model: MemberModel,
+          match: { gymId },
+          select: "fullName status",
+        })
         .sort({ expiryDate: 1 })
         .lean(),
     ]);
@@ -152,27 +154,33 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json({ error: "GYMOS_GYM_ID must be set to a valid gym ID." }, { status: 500 });
+  let rawBody: unknown;
+  let parsedBody: Record<string, unknown> | null = null;
+  try {
+    rawBody = await request.json();
+    if (rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)) {
+      parsedBody = rawBody as Record<string, unknown>;
+    }
+  } catch {
+    rawBody = undefined;
   }
 
-  let input: Record<string, unknown>;
-  try {
-    const body: unknown = await request.json();
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
-    }
-    input = body as Record<string, unknown>;
-  } catch {
+  const auth = await requireStaffContext(request, parsedBody);
+  if (auth.response) {
+    return auth.response;
+  }
+  const { gymId } = auth.ctx;
+
+  if (rawBody === undefined) {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
+  if (!parsedBody) {
+    return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
+  }
+  const input = parsedBody;
 
   try {
     await connectToDatabase();
-    if (!(await GymModel.exists({ _id: gymId }))) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
-    }
 
     if (input.action === "plan") {
       const name = typeof input.name === "string" ? input.name.trim() : "";

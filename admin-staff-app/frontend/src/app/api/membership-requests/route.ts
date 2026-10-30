@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
-import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import { connectToDatabase, runInTransactionOrFallback } from "gymos-admin-backend/lib/mongodb";
 import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import MembershipRequestModel from "gymos-admin-backend/models/membership-request";
 import PaymentModel from "gymos-admin-backend/models/payment";
-import { resolveActiveGymId } from "@/lib/gym-context";
+import { requireStaffContext } from "@/lib/gym-context";
 
 export const runtime = "nodejs";
 
@@ -29,21 +29,24 @@ function addMonths(date: Date, months: number) {
 }
 
 export async function GET(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json(
-      { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
-      { status: 500 },
-    );
-  }
-
   try {
+    const auth = await requireStaffContext(request);
+    if (auth.response) {
+      return auth.response;
+    }
+    const { gymId } = auth.ctx;
+
     await connectToDatabase();
     const docs = await MembershipRequestModel.find({
       gymId,
       status: "pending",
     })
-      .populate({ path: "memberId", model: MemberModel, select: "fullName phone email" })
+      .populate({
+        path: "memberId",
+        model: MemberModel,
+        match: { $or: [{ gymId }, { gymId: { $exists: false } }, { gymId: null }] },
+        select: "fullName phone email",
+      })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -82,24 +85,30 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const gymId = await resolveActiveGymId(request);
-  if (!gymId) {
-    return NextResponse.json(
-      { error: "GYMOS_GYM_ID must be set to a valid gym ID." },
-      { status: 500 },
-    );
+  let rawBody: unknown;
+  let parsedBody: Record<string, unknown> | null = null;
+  try {
+    rawBody = await request.json();
+    if (rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)) {
+      parsedBody = rawBody as Record<string, unknown>;
+    }
+  } catch {
+    rawBody = undefined;
   }
 
-  let input: Record<string, unknown>;
-  try {
-    const body: unknown = await request.json();
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
-    }
-    input = body as Record<string, unknown>;
-  } catch {
+  const auth = await requireStaffContext(request, parsedBody);
+  if (auth.response) {
+    return auth.response;
+  }
+  const { gymId, gym } = auth.ctx;
+
+  if (rawBody === undefined) {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
+  if (!parsedBody) {
+    return NextResponse.json({ error: "Request body must be a JSON object." }, { status: 400 });
+  }
+  const input = parsedBody;
 
   const action = typeof input.action === "string" ? input.action : "";
   const requestId = typeof input.requestId === "string" ? input.requestId : "";
@@ -113,16 +122,28 @@ export async function POST(request: Request) {
 
   try {
     await connectToDatabase();
-    const gym = await GymModel.findById(gymId).select("name slug");
-    if (!gym) {
-      return NextResponse.json({ error: "Configured gym was not found." }, { status: 404 });
+
+    if (action === "decline") {
+      const declined = await MembershipRequestModel.findOneAndUpdate(
+        { _id: requestId, gymId, status: "pending" },
+        { $set: { status: "declined", respondedAt: new Date() } },
+        { new: true },
+      );
+      if (!declined) {
+        return NextResponse.json(
+          { error: "Pending membership request was not found or was already handled." },
+          { status: 404 },
+        );
+      }
+      return NextResponse.json({ ok: true, status: "declined" });
     }
 
-    const reqDoc = await MembershipRequestModel.findOne({
-      _id: requestId,
-      gymId,
-      status: "pending",
-    });
+    // Atomically lock the pending request first to prevent duplicate acceptance
+    const reqDoc = await MembershipRequestModel.findOneAndUpdate(
+      { _id: requestId, gymId, status: "pending" },
+      { $set: { status: "accepted", respondedAt: new Date() } },
+      { new: true },
+    );
 
     if (!reqDoc) {
       return NextResponse.json(
@@ -131,87 +152,125 @@ export async function POST(request: Request) {
       );
     }
 
-    if (action === "decline") {
-      reqDoc.status = "declined";
-      reqDoc.respondedAt = new Date();
-      await reqDoc.save();
-      return NextResponse.json({ ok: true, status: "declined" });
-    }
+    const rollbackRequest = async () => {
+      await MembershipRequestModel.updateOne(
+        { _id: reqDoc._id },
+        { $set: { status: "pending" }, $unset: { respondedAt: 1 } },
+      ).catch(() => undefined);
+    };
 
-    // ACCEPT: Activate member in this gym, create/extend Membership, and record Paid Payment!
     const member = await MemberModel.findById(reqDoc.memberId);
     if (!member) {
+      await rollbackRequest();
       return NextResponse.json({ error: "Member account was not found." }, { status: 404 });
     }
 
-    const wasAlreadyInGym = member.gymId && String(member.gymId) === gymId.toString();
-    member.gymId = gymId;
-    member.status = "active";
-    if (!wasAlreadyInGym) {
-      member.joinDate = new Date();
-    }
-    await member.save();
-
+    // Prevent overwriting an active membership in a different gym tenant
     const todayUtc = getUtcToday();
-    const existingMembership = await MembershipModel.findOne({
-      gymId,
-      memberId: member._id,
-    }).sort({ expiryDate: -1 });
-
-    let membership;
-    if (existingMembership) {
-      const baseStart =
-        existingMembership.expiryDate > todayUtc ? existingMembership.expiryDate : todayUtc;
-      existingMembership.planName = reqDoc.planName;
-      existingMembership.price = reqDoc.price;
-      existingMembership.startDate =
-        existingMembership.expiryDate > todayUtc ? existingMembership.startDate : todayUtc;
-      existingMembership.expiryDate = addMonths(baseStart, reqDoc.durationMonths);
-      existingMembership.status = "active";
-      existingMembership.paymentStatus = "Paid";
-      await existingMembership.save();
-      membership = existingMembership;
-    } else {
-      membership = await MembershipModel.create({
-        gymId,
+    if (member.gymId && String(member.gymId) !== gymId.toString()) {
+      const otherGymActiveMembership = await MembershipModel.findOne({
+        gymId: member.gymId,
         memberId: member._id,
-        planName: reqDoc.planName,
-        price: reqDoc.price,
-        startDate: todayUtc,
-        expiryDate: addMonths(todayUtc, reqDoc.durationMonths),
         status: "active",
-        paymentStatus: "Paid",
+        expiryDate: { $gte: todayUtc },
       });
+      if (otherGymActiveMembership) {
+        const otherGym = await GymModel.findById(member.gymId).select("name");
+        await rollbackRequest();
+        return NextResponse.json(
+          {
+            error: `This member already has an active plan at ${otherGym?.name ?? "another gym"}.`,
+          },
+          { status: 409 },
+        );
+      }
     }
 
-    await PaymentModel.create({
-      gymId,
-      memberId: member._id,
-      amount: reqDoc.price,
-      description: `${reqDoc.planName} (Mobile signup)`,
-      paymentMethod: reqDoc.paymentMethod,
-      status: "Paid",
-      date: new Date(),
-    });
+    try {
+      const acceptedMembership = await runInTransactionOrFallback(async (tx) => {
+        const sessionOpt = tx ? { session: tx } : {};
+        const wasAlreadyInGym = member.gymId && String(member.gymId) === gymId.toString();
+        member.gymId = gymId;
+        member.status = "active";
+        if (!wasAlreadyInGym) {
+          member.joinDate = new Date();
+        }
+        await member.save(sessionOpt);
 
-    reqDoc.status = "accepted";
-    reqDoc.respondedAt = new Date();
-    await reqDoc.save();
+        const existingMembership = await MembershipModel.findOne(
+          { gymId, memberId: member._id },
+          null,
+          sessionOpt,
+        ).sort({ expiryDate: -1 });
 
-    return NextResponse.json({
-      ok: true,
-      status: "accepted",
-      accepted: {
-        requestId: reqDoc._id.toString(),
-        memberId: member._id.toString(),
-        memberName: member.fullName,
-        gymName: gym.name,
-        planName: membership.planName,
-        price: reqDoc.price,
-        paymentMethod: reqDoc.paymentMethod,
-        expiryDate: membership.expiryDate.toISOString().slice(0, 10),
-      },
-    });
+        let membershipDoc;
+        if (existingMembership) {
+          const baseStart =
+            existingMembership.expiryDate > todayUtc ? existingMembership.expiryDate : todayUtc;
+          existingMembership.planName = reqDoc.planName;
+          existingMembership.price = reqDoc.price;
+          existingMembership.startDate =
+            existingMembership.expiryDate > todayUtc ? existingMembership.startDate : todayUtc;
+          existingMembership.expiryDate = addMonths(baseStart, reqDoc.durationMonths);
+          existingMembership.status = "active";
+          existingMembership.paymentStatus = "Paid";
+          await existingMembership.save(sessionOpt);
+          membershipDoc = existingMembership;
+        } else {
+          const [created] = await MembershipModel.create(
+            [
+              {
+                gymId,
+                memberId: member._id,
+                planName: reqDoc.planName,
+                price: reqDoc.price,
+                startDate: todayUtc,
+                expiryDate: addMonths(todayUtc, reqDoc.durationMonths),
+                status: "active",
+                paymentStatus: "Paid",
+              },
+            ],
+            sessionOpt,
+          );
+          membershipDoc = created;
+        }
+
+        await PaymentModel.create(
+          [
+            {
+              gymId,
+              memberId: member._id,
+              amount: reqDoc.price,
+              description: `${reqDoc.planName} (Mobile signup)`,
+              paymentMethod: reqDoc.paymentMethod,
+              status: "Paid",
+              date: new Date(),
+            },
+          ],
+          sessionOpt,
+        );
+
+        return membershipDoc;
+      });
+
+      return NextResponse.json({
+        ok: true,
+        status: "accepted",
+        accepted: {
+          requestId: reqDoc._id.toString(),
+          memberId: member._id.toString(),
+          memberName: member.fullName,
+          gymName: gym.name,
+          planName: acceptedMembership.planName,
+          price: reqDoc.price,
+          paymentMethod: reqDoc.paymentMethod,
+          expiryDate: acceptedMembership.expiryDate.toISOString().slice(0, 10),
+        },
+      });
+    } catch (err) {
+      await rollbackRequest();
+      throw err;
+    }
   } catch (error) {
     console.error("Failed to process membership request:", error);
     return NextResponse.json(

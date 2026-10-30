@@ -16,6 +16,17 @@ import {
   MEMBER_SESSION_COOKIE,
   verifyMemberSessionToken,
 } from "@/lib/member-session";
+import {
+  getPlatformTokenFromRequest,
+  PLATFORM_SESSION_COOKIE,
+  verifyPlatformSessionToken,
+} from "@/lib/platform-session";
+import {
+  getStaffTokenFromRequest,
+  STAFF_SESSION_COOKIE,
+  verifyStaffSessionToken,
+} from "@/lib/staff-session";
+import { hasConflictingGymRef } from "@/lib/tenant-guard";
 
 export const runtime = "nodejs";
 
@@ -30,18 +41,90 @@ async function findGymFromQrPayload(rawQr: string) {
   if (trimmed.toUpperCase().startsWith(prefix)) {
     const idPart = trimmed.slice(prefix.length).trim();
     if (Types.ObjectId.isValid(idPart)) {
-      const byId = await GymModel.findById(idPart);
+      const byId = await GymModel.findOne({ _id: idPart, status: "active" });
       if (byId) return byId;
     }
-    return GymModel.findOne({ slug: idPart.toLowerCase() });
+    return GymModel.findOne({ slug: idPart.toLowerCase(), status: "active" });
   }
 
   if (Types.ObjectId.isValid(trimmed)) {
-    const byId = await GymModel.findById(trimmed);
+    const byId = await GymModel.findOne({ _id: trimmed, status: "active" });
     if (byId) return byId;
   }
 
-  return GymModel.findOne({ slug: trimmed.toLowerCase() });
+  return GymModel.findOne({ slug: trimmed.toLowerCase(), status: "active" });
+}
+
+async function authenticateVerifiedMember(request: NextRequest) {
+  const session = await verifyMemberSessionToken(
+    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
+  );
+  if (!session) {
+    const [staffAttempt, platformAttempt] = await Promise.all([
+      verifyStaffSessionToken(
+        getStaffTokenFromRequest(request, request.cookies.get(STAFF_SESSION_COOKIE)?.value),
+      ),
+      verifyPlatformSessionToken(
+        getPlatformTokenFromRequest(request, request.cookies.get(PLATFORM_SESSION_COOKIE)?.value),
+      ),
+    ]);
+    if (staffAttempt || platformAttempt) {
+      return {
+        response: memberApiResponse(
+          request,
+          { error: "Member account permissions are required." },
+          403,
+        ),
+      };
+    }
+    return {
+      response: memberApiResponse(request, { error: "Member authentication is required." }, 401),
+    };
+  }
+
+  if (session.role !== "member") {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "Only member accounts can access gym subscription plans." },
+        403,
+      ),
+    };
+  }
+
+  if (!Types.ObjectId.isValid(session.memberId)) {
+    return {
+      response: memberApiResponse(request, { error: "Member authentication is required." }, 401),
+    };
+  }
+
+  await connectToDatabase();
+  const member = await MemberModel.findById(session.memberId);
+  if (!member) {
+    return {
+      response: memberApiResponse(request, { error: "Member authentication is required." }, 401),
+    };
+  }
+  if (member.status === "suspended") {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "Your member account is currently suspended." },
+        403,
+      ),
+    };
+  }
+  if (session.gymId && (!member.gymId || String(member.gymId) !== session.gymId)) {
+    return {
+      response: memberApiResponse(
+        request,
+        { error: "Member gym relationship could not be verified." },
+        403,
+      ),
+    };
+  }
+
+  return { member };
 }
 
 export async function OPTIONS(request: Request) {
@@ -54,30 +137,65 @@ export async function GET(request: NextRequest) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
 
-  const session = await verifyMemberSessionToken(
-    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
-  );
-  if (!session || session.role !== "member" || !Types.ObjectId.isValid(session.memberId)) {
-    return memberApiResponse(request, { error: "Member authentication is required." }, 401);
-  }
-
-  const qr = request.nextUrl.searchParams.get("qr")?.trim() ?? "";
-  if (!qr) {
-    return memberApiResponse(
-      request,
-      { error: "Scan a valid GymOS reception QR code to connect to a gym." },
-      400,
-    );
-  }
-
   try {
-    await connectToDatabase();
+    const auth = await authenticateVerifiedMember(request);
+    if (auth.response) return auth.response;
+    const { member } = auth;
+
+    if (member.gymId && Types.ObjectId.isValid(String(member.gymId))) {
+      const assignedGym = await GymModel.findById(member.gymId).select("slug status");
+      if (assignedGym && assignedGym.status !== "active") {
+        return memberApiResponse(
+          request,
+          { error: "This gym workspace is currently suspended." },
+          403,
+        );
+      }
+      if (
+        assignedGym &&
+        hasConflictingGymRef(request, {
+          id: String(member.gymId),
+          slug: assignedGym.slug,
+        })
+      ) {
+        return memberApiResponse(
+          request,
+          {
+            error:
+              "Cross-gym access denied: members may only access their own gym's information.",
+          },
+          403,
+        );
+      }
+    }
+
+    const qr = request.nextUrl.searchParams.get("qr")?.trim() ?? "";
+    if (!qr) {
+      return memberApiResponse(
+        request,
+        { error: "Scan a valid GymOS reception QR code to connect to a gym." },
+        400,
+      );
+    }
+
     const gym = await findGymFromQrPayload(qr);
     if (!gym) {
       return memberApiResponse(
         request,
         { error: "Invalid QR code. Scan the Reception QR code displayed at the gym front desk." },
         404,
+      );
+    }
+
+    // Tenant isolation: members already affiliated with a gym may only view their own gym's information
+    if (member.gymId && String(member.gymId) !== gym._id.toString()) {
+      return memberApiResponse(
+        request,
+        {
+          error:
+            "Cross-gym access denied: members may only access their own gym's information.",
+        },
+        403,
       );
     }
 
@@ -121,30 +239,58 @@ export async function POST(request: NextRequest) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
   }
 
-  const session = await verifyMemberSessionToken(
-    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
-  );
-  if (!session || session.role !== "member" || !Types.ObjectId.isValid(session.memberId)) {
-    return memberApiResponse(request, { error: "Member authentication is required." }, 401);
-  }
-
+  let parsedInput: Record<string, unknown> | undefined;
   const parsed = await parseMemberAuthBody(request);
-  if (!parsed.input) {
-    return memberApiResponse(request, { error: parsed.error }, 400);
+  if (parsed.input) {
+    parsedInput = parsed.input;
   }
-  const input = parsed.input;
-  const action = typeof input.action === "string" ? input.action : "subscribe";
 
   try {
-    await connectToDatabase();
-    const member = await MemberModel.findById(session.memberId);
-    if (!member) {
-      return memberApiResponse(request, { error: "Member account was not found." }, 404);
+    const auth = await authenticateVerifiedMember(request);
+    if (auth.response) return auth.response;
+    const { member } = auth;
+
+    if (!parsedInput) {
+      return memberApiResponse(request, { error: parsed.error }, 400);
+    }
+    const input = parsedInput;
+    const action = typeof input.action === "string" ? input.action : "subscribe";
+
+    if (member.gymId && Types.ObjectId.isValid(String(member.gymId))) {
+      const assignedGym = await GymModel.findById(member.gymId).select("slug status");
+      if (assignedGym && assignedGym.status !== "active") {
+        return memberApiResponse(
+          request,
+          { error: "This gym workspace is currently suspended." },
+          403,
+        );
+      }
+      if (
+        assignedGym &&
+        hasConflictingGymRef(
+          request,
+          { id: String(member.gymId), slug: assignedGym.slug },
+          input,
+        )
+      ) {
+        return memberApiResponse(
+          request,
+          {
+            error:
+              "Cross-gym access denied: members may only access their own gym's information.",
+          },
+          403,
+        );
+      }
     }
 
     if (action === "cancel") {
       await MembershipRequestModel.updateMany(
-        { memberId: member._id, status: "pending" },
+        {
+          memberId: member._id,
+          ...(member.gymId ? { gymId: member.gymId } : {}),
+          status: "pending",
+        },
         { $set: { status: "declined", respondedAt: new Date() } },
       );
       return memberApiResponse(request, { ok: true });
@@ -172,8 +318,19 @@ export async function POST(request: NextRequest) {
     const gymId = new Types.ObjectId(gymIdRaw);
     const planId = new Types.ObjectId(planIdRaw);
 
+    if (member.gymId && String(member.gymId) !== gymId.toString()) {
+      return memberApiResponse(
+        request,
+        {
+          error:
+            "Cross-gym access denied: your account is already registered with another gym.",
+        },
+        403,
+      );
+    }
+
     const [gym, plan] = await Promise.all([
-      GymModel.findById(gymId).select("name"),
+      GymModel.findOne({ _id: gymId, status: "active" }).select("name"),
       MembershipPlanModel.findOne({ _id: planId, gymId, active: true }),
     ]);
 

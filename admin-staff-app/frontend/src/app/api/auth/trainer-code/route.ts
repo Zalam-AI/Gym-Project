@@ -9,6 +9,7 @@ import {
   memberApiOptions,
   memberApiResponse,
 } from "@/lib/member-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -19,6 +20,21 @@ export async function OPTIONS(request: Request) {
 export async function GET(request: NextRequest) {
   if (!isAllowedMemberOrigin(request)) {
     return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
+  }
+
+  const rate = checkRateLimit(request, {
+    namespace: "trainer-code-check",
+    limit: 20,
+    windowMs: 10 * 60_000,
+  });
+  if (!rate.allowed) {
+    const res = memberApiResponse(
+      request,
+      { valid: false, error: "Too many code checks. Please wait a few minutes and try again." },
+      429,
+    );
+    res.headers.set("Retry-After", String(rate.retryAfterSeconds));
+    return res;
   }
 
   const rawCode = request.nextUrl.searchParams.get("code") ?? "";
@@ -41,7 +57,7 @@ export async function GET(request: NextRequest) {
       }
 
       const [gym, linkedTrainer] = await Promise.all([
-        GymModel.findById(invite.gymId).select("name slug"),
+        GymModel.findOne({ _id: invite.gymId, status: { $ne: "suspended" } }).select("name slug"),
         invite.trainerId
           ? TrainerModel.findById(invite.trainerId).select("name specialty phone +passwordHash")
           : Promise.resolve(null),
@@ -69,7 +85,6 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Fallback: check unclaimed directory trainer with matching inviteCode
     const trainer = await TrainerModel.findOne({ inviteCode: code }).select(
       "gymId name specialty phone +passwordHash",
     );
@@ -88,7 +103,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const gym = await GymModel.findById(trainer.gymId).select("name slug");
+    const gym = await GymModel.findOne({
+      _id: trainer.gymId,
+      status: { $ne: "suspended" },
+    }).select("name slug");
     if (!gym) {
       return memberApiResponse(request, { valid: false, error: "Gym was not found." }, 404);
     }
