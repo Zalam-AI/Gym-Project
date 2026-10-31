@@ -493,13 +493,13 @@ export function PaymentsPage() {
               <div className="flex flex-col gap-2 sm:flex-row">
                 <label className="relative block w-full sm:w-[230px]">
                   <span className="sr-only">Search transactions by member name</span>
-                  <Search size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa3ae]" />
+                  <Search size={15} aria-hidden="true" className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-[#9aa3ae]" />
                   <input
                     type="search"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Search member..."
-                    className="min-h-9 w-full rounded-lg border border-[#e7ebee] bg-white pl-9 pr-3 text-[11px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+                    className="min-h-9 w-full rounded-lg border border-[#e7ebee] bg-white ps-9 pe-3 text-[11px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
                   />
                 </label>
                 <label>
@@ -509,7 +509,7 @@ export function PaymentsPage() {
                     onChange={(event) => setMethodFilter(event.target.value as (typeof methodFilters)[number])}
                     className="min-h-9 w-full rounded-lg border border-[#e7ebee] bg-white px-3 text-[11px] text-[#536071] outline-none focus:border-[#55b994] sm:w-[190px]"
                   >
-                    {methodFilters.map((method) => <option key={method}>{method}</option>)}
+                    {methodFilters.map((method) => <option key={method} value={method}>{method}</option>)}
                   </select>
                 </label>
               </div>
@@ -549,7 +549,7 @@ export function PaymentsPage() {
                           <MoreHorizontal size={17} aria-hidden="true" />
                         </button>
                         {openActionId === transaction.id && (
-                          <div role="menu" className="absolute right-4 top-[calc(100%-8px)] z-20 min-w-36 rounded-lg border border-[#e9edf1] bg-white p-1 shadow-lg">
+                          <div role="menu" className="absolute end-4 top-[calc(100%-8px)] z-20 min-w-36 rounded-lg border border-[#e9edf1] bg-white p-1 shadow-lg">
                             <button
                               type="button"
                               role="menuitem"
@@ -557,7 +557,7 @@ export function PaymentsPage() {
                                 setReceiptTransactionId(transaction.id);
                                 setOpenActionId(null);
                               }}
-                              className="flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-[11px] text-[#536071] hover:bg-[#f5f7f8]"
+                              className="flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 text-start text-[11px] text-[#536071] hover:bg-[#f5f7f8]"
                             >
                               <FileText size={14} aria-hidden="true" />
                               View receipt

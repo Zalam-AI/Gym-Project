@@ -24,6 +24,7 @@ import {
   Sliders,
   X,
 } from "lucide-react";
+import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearPlatformSessionToken,
   ensurePlatformFetchPatched,
@@ -803,7 +804,8 @@ export function PlatformDashboardPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <LanguageSwitch variant="dark" />
             <button
               type="button"
               onClick={() => void loadConsoleData()}
@@ -817,7 +819,7 @@ export function PlatformDashboardPage() {
               />
               <span>Refresh</span>
             </button>
-            <div className="hidden border-l border-slate-800 pl-3 text-right sm:block">
+            <div className="hidden border-s border-slate-800 ps-3 text-end sm:block">
               <p className="text-xs font-semibold text-slate-100">{admin?.name}</p>
               <p className="text-[10px] text-slate-400">{admin?.email}</p>
             </div>
@@ -1166,14 +1168,14 @@ export function PlatformDashboardPage() {
                 <div className="relative min-w-[230px] flex-1">
                   <Search
                     size={15}
-                    className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400"
+                    className="pointer-events-none absolute top-1/2 start-3 -translate-y-1/2 text-slate-400"
                     aria-hidden="true"
                   />
                   <input
                     value={gymSearch}
                     onChange={(e) => setGymSearch(e.target.value)}
                     placeholder="Search gym name, subdomain, custom domain, or owner email…"
-                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pr-3 pl-9 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
+                    className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pe-3 ps-9 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none"
                   />
                 </div>
                 <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">

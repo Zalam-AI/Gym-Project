@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { useLanguage } from "@/lib/i18n";
 
 export type NavigationPage =
   | "Dashboard"
@@ -58,6 +59,7 @@ export function Sidebar({
   gymLogoText,
   gymAccentColor,
 }: SidebarProps) {
+  const { isRtl, t } = useLanguage();
   const accentColor =
     gymAccentColor && /^#[0-9a-fA-F]{6}$/.test(gymAccentColor)
       ? gymAccentColor
@@ -67,22 +69,24 @@ export function Sidebar({
       {open && (
         <button
           type="button"
-          aria-label="Close navigation menu"
+          aria-label={t("Close navigation menu")}
           className="fixed inset-0 z-30 bg-slate-950/40 md:hidden"
           onClick={onClose}
         />
       )}
       <aside
-        aria-label="Main sidebar"
-        className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col bg-[#172433] px-4 py-6 text-white transition-transform duration-200 md:translate-x-0 ${
-          open ? "visible translate-x-0" : "invisible -translate-x-full md:visible md:translate-x-0"
+        aria-label={t("Main sidebar")}
+        className={`fixed inset-y-0 start-0 z-40 flex w-[248px] flex-col bg-[#172433] px-4 py-6 text-white transition-transform duration-200 md:translate-x-0 ${
+          open
+            ? "visible translate-x-0"
+            : `invisible ${isRtl ? "translate-x-full" : "-translate-x-full"} md:visible md:translate-x-0`
         } md:w-[220px] md:px-3 lg:w-[248px] lg:px-4`}
       >
         <div className="mb-8 flex items-center justify-between px-2">
           <Link
             href="/"
             className="flex min-w-0 items-center gap-3 rounded-lg"
-            aria-label="GymOS home"
+            aria-label={t("GymOS home")}
             onClick={onClose}
           >
             <span
@@ -92,7 +96,10 @@ export function Sidebar({
               {gymLogoText || "G"}
             </span>
             <div className="min-w-0">
-              <span className="block truncate text-[17px] font-semibold tracking-[-0.03em]">
+              <span
+                data-no-translate={!gymName ? "true" : undefined}
+                className="block truncate text-[17px] font-semibold tracking-[-0.03em]"
+              >
                 {gymName || (
                   <>
                     Gym<span className="text-[#63c69d]">OS</span>
@@ -101,14 +108,14 @@ export function Sidebar({
               </span>
               {gymName && (
                 <span className="block truncate text-[10px] font-medium text-slate-400">
-                  Powered by GymOS
+                  {t("Powered by GymOS")}
                 </span>
               )}
             </div>
           </Link>
           <button
             type="button"
-            aria-label="Close navigation menu"
+            aria-label={t("Close navigation menu")}
             className="rounded-lg p-2 text-slate-300 hover:bg-white/10 md:hidden"
             onClick={onClose}
           >
@@ -117,9 +124,9 @@ export function Sidebar({
         </div>
 
         <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-          Workspace
+          {t("Workspace")}
         </p>
-        <nav id="primary-navigation" aria-label="Primary navigation" className="space-y-1">
+        <nav id="primary-navigation" aria-label={t("Primary navigation")} className="space-y-1">
           {navigation.map(({ id, label, href, icon: Icon }) => {
             const isActive = activePage === id;
             return (
@@ -134,11 +141,11 @@ export function Sidebar({
                     : "text-slate-300 hover:bg-white/5 hover:text-white"
                 }`}
               >
-                <Icon size={18} aria-hidden="true" />
-                <span>{label}</span>
+                <Icon size={18} aria-hidden="true" className="shrink-0" />
+                <span>{t(label)}</span>
                 {isActive && (
                   <span
-                    className="ml-auto h-5 w-1 rounded-full"
+                    className="ms-auto h-5 w-1 rounded-full"
                     style={{ backgroundColor: accentColor }}
                   />
                 )}
@@ -153,11 +160,11 @@ export function Sidebar({
               <Building2 size={14} aria-hidden="true" />
             </span>
             <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#77d0aa]">
-              Active Club
+              {t("Active Club")}
             </span>
           </div>
           <p className="truncate text-[12px] font-semibold text-white">
-            {gymName || "GymOS Workspace"}
+            {gymName || t("GymOS Workspace")}
           </p>
           {gymSubdomain || gymSlug ? (
             <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">
@@ -165,7 +172,7 @@ export function Sidebar({
             </p>
           ) : (
             <p className="mt-1 text-[11px] leading-5 text-slate-400">
-              Multi-tenant club workspace
+              {t("Multi-tenant club workspace")}
             </p>
           )}
         </div>

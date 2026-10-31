@@ -47,15 +47,28 @@ export async function GET(request: Request) {
 
   try {
     await connectToDatabase();
-    const plans = await WorkoutPlanModel.find({ gymId })
-      .populate({
-        path: "assignedMemberIds",
-        model: MemberModel,
-        match: { gymId },
-        select: "fullName",
-      })
-      .sort({ title: 1 })
-      .lean();
+    const [plans, pendingMembers] = await Promise.all([
+      WorkoutPlanModel.find({ gymId })
+        .populate({
+          path: "assignedMemberIds",
+          model: MemberModel,
+          match: { gymId },
+          select: "fullName",
+        })
+        .sort({ title: 1 })
+        .lean(),
+      MemberModel.find({ gymId, pendingWorkoutPlanId: { $ne: null } })
+        .select("fullName pendingWorkoutPlanId pendingWorkoutAssignedAt pendingWorkoutAssignedBy")
+        .lean<
+          Array<{
+            _id: Types.ObjectId;
+            fullName: string;
+            pendingWorkoutPlanId?: Types.ObjectId | null;
+            pendingWorkoutAssignedAt?: Date | null;
+            pendingWorkoutAssignedBy?: string;
+          }>
+        >(),
+    ]);
     const workoutPlans = plans.map((plan) => {
       const serializedPlan = plan as unknown as Parameters<typeof serializePlan>[0];
       const assignedMembers = plan.assignedMemberIds as unknown as Array<{ _id: Types.ObjectId; fullName: string }>;
@@ -64,7 +77,17 @@ export async function GET(request: Request) {
         assignedMemberNames: assignedMembers.map((member) => member.fullName),
       };
     });
-    return NextResponse.json({ workoutPlans });
+    const validPlanIdSet = new Set(workoutPlans.map((p) => p.id));
+    const pendingAssignments = pendingMembers
+      .filter((m) => m.pendingWorkoutPlanId && validPlanIdSet.has(String(m.pendingWorkoutPlanId)))
+      .map((m) => ({
+        memberId: m._id.toString(),
+        memberName: m.fullName,
+        workoutPlanId: String(m.pendingWorkoutPlanId),
+        assignedAt: m.pendingWorkoutAssignedAt ? new Date(m.pendingWorkoutAssignedAt).toISOString() : null,
+        assignedBy: m.pendingWorkoutAssignedBy ?? "",
+      }));
+    return NextResponse.json({ workoutPlans, pendingAssignments });
   } catch (error) {
     console.error("Failed to fetch workout plans:", error);
     return NextResponse.json({ error: "Unable to fetch workout plans at this time." }, { status: 503 });
@@ -75,7 +98,7 @@ export async function POST(request: Request) {
   const parsed = await parseBody(request);
   const auth = await requireStaffContext(request, parsed.input ?? null);
   if (auth.response) return auth.response;
-  const { gymId } = auth.ctx;
+  const { gymId, userName } = auth.ctx;
 
   if (!parsed.input) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const input = parsed.input;
@@ -94,12 +117,48 @@ export async function POST(request: Request) {
         MemberModel.findOne({ _id: memberId, gymId }),
       ]);
       if (!plan || !member) return NextResponse.json({ error: "Workout plan or member was not found for this gym." }, { status: 404 });
-      await WorkoutPlanModel.updateMany(
-        { gymId, assignedMemberIds: member._id },
-        { $pull: { assignedMemberIds: member._id } },
+
+      const alreadyAssigned = (plan.assignedMemberIds as unknown[]).some(
+        (id) => String(id) === String(member._id),
       );
-      await WorkoutPlanModel.updateOne({ _id: plan._id, gymId }, { $addToSet: { assignedMemberIds: member._id } });
-      return NextResponse.json({ assignment: { workoutPlanId: plan._id.toString(), memberId: member._id.toString() } });
+      if (alreadyAssigned) {
+        await MemberModel.updateOne(
+          { _id: member._id, gymId },
+          {
+            $set: {
+              pendingWorkoutPlanId: null,
+              pendingWorkoutAssignedAt: null,
+              pendingWorkoutAssignedBy: "",
+            },
+          },
+        );
+        return NextResponse.json({
+          assignment: {
+            workoutPlanId: plan._id.toString(),
+            memberId: member._id.toString(),
+            status: "active",
+          },
+        });
+      }
+
+      // Queue as a pending workout routine change so the member can verify & accept/decline in the Mobile App
+      await MemberModel.updateOne(
+        { _id: member._id, gymId },
+        {
+          $set: {
+            pendingWorkoutPlanId: plan._id,
+            pendingWorkoutAssignedAt: new Date(),
+            pendingWorkoutAssignedBy: userName || "Gym Staff",
+          },
+        },
+      );
+      return NextResponse.json({
+        assignment: {
+          workoutPlanId: plan._id.toString(),
+          memberId: member._id.toString(),
+          status: "pending_member_confirmation",
+        },
+      });
     }
 
     if (input.action !== "create") return NextResponse.json({ error: "action must be create or assign." }, { status: 400 });

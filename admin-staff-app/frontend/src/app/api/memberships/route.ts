@@ -113,32 +113,23 @@ export async function GET(request: Request) {
       }
     }
 
-    const planByName = new Map(plans.map((plan) => [plan.name, serializePlan(plan)]));
-    for (const membership of visibleMemberships) {
-      const member = membership.memberId as unknown as { _id: Types.ObjectId; fullName: string; status: string } | null;
-      if (!member || planByName.has(membership.planName)) continue;
-      const durationMonths = durationInMonths(membership.startDate, membership.expiryDate);
-      planByName.set(membership.planName, {
-        id: `legacy-${membership.planName}`,
-        name: membership.planName,
-        price: membership.price,
-        durationMonths,
-        durationLabel: `${durationMonths} ${durationMonths === 1 ? "month" : "months"}`,
-        benefits: [],
-        featured: false,
-      });
-    }
+    const activePlans = plans.map((plan) => serializePlan(plan));
+    const activePlanByName = new Map(activePlans.map((plan) => [plan.name, plan]));
 
     const subscriptions = visibleMemberships.flatMap((membership) => {
       const member = membership.memberId as unknown as { _id: Types.ObjectId; fullName: string; status: string } | null;
-      const plan = planByName.get(membership.planName);
-      if (!member || !plan) return [];
+      if (!member) return [];
+      const activePlan = activePlanByName.get(membership.planName);
+      const fallbackDuration = durationInMonths(membership.startDate, membership.expiryDate);
       return [
         {
           id: String(membership._id),
           memberId: member._id.toString(),
           memberName: member.fullName,
-          planId: plan.id,
+          planId: activePlan?.id ?? `legacy-${membership.planName}`,
+          planName: membership.planName,
+          planPrice: activePlan?.price ?? membership.price,
+          planDurationMonths: activePlan?.durationMonths ?? fallbackDuration,
           startDate: membership.startDate.toISOString().slice(0, 10),
           expirationDate: membership.expiryDate.toISOString().slice(0, 10),
           paymentStatus: membership.paymentStatus ?? paymentStatusByMember.get(member._id.toString()) ?? "Pending",
@@ -146,7 +137,7 @@ export async function GET(request: Request) {
       ];
     });
 
-    return NextResponse.json({ plans: [...planByName.values()], subscriptions });
+    return NextResponse.json({ plans: activePlans, subscriptions });
   } catch (error) {
     console.error("Failed to fetch memberships from the database:", error);
     return NextResponse.json({ error: "Unable to fetch memberships at this time." }, { status: 503 });
@@ -219,6 +210,22 @@ export async function POST(request: Request) {
         active: true,
       });
       return NextResponse.json({ plan: serializePlan(plan) }, { status: 201 });
+    }
+
+    if (input.action === "delete-plan") {
+      const planId = typeof input.planId === "string" ? input.planId.trim() : "";
+      if (!Types.ObjectId.isValid(planId)) {
+        return NextResponse.json({ error: "A valid planId is required." }, { status: 400 });
+      }
+      const deletedPlan = await MembershipPlanModel.findOneAndUpdate(
+        { _id: planId, gymId, active: true },
+        { $set: { active: false } },
+        { new: true },
+      );
+      if (!deletedPlan) {
+        return NextResponse.json({ error: "Membership plan was not found." }, { status: 404 });
+      }
+      return NextResponse.json({ deletedPlanId: deletedPlan._id.toString() });
     }
 
     const paymentStatus = input.paymentStatus ?? "Pending";

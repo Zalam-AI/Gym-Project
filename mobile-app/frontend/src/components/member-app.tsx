@@ -37,6 +37,7 @@ import {
   type GymPlanOption,
   type PendingSubscriptionInfo,
 } from "@/components/member-onboarding-view";
+import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearMobileSessionToken,
   getMobileSessionToken,
@@ -82,6 +83,15 @@ type WorkoutPlan = {
   exercises: WorkoutExercise[];
 };
 
+type PendingWorkoutOffer = {
+  id: string;
+  title: string;
+  targetGoal: string;
+  assignedBy: string;
+  assignedAt: string | null;
+  exercises: WorkoutExercise[];
+};
+
 type UpcomingMemberSession = {
   id: string;
   title: string;
@@ -105,6 +115,7 @@ type PortalResponse = {
     availability?: AvailabilitySlot[];
   } | null;
   workoutPlan?: WorkoutPlan | null;
+  pendingWorkoutPlan?: PendingWorkoutOffer | null;
   upcomingSessions?: UpcomingMemberSession[];
   visits?: Array<{ id: string; checkInTime: string; source: string }>;
   error?: string;
@@ -376,12 +387,16 @@ function MobileAuthScreen({
               G
             </span>
             <div>
-              <p className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]">
+              <p
+                data-no-translate="true"
+                className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+              >
                 Gym<span className="text-[#2d9d78]">OS</span>
               </p>
               <p className="text-[9px] text-[#8993a0]">MEMBERS &amp; TRAINERS</p>
             </div>
           </div>
+          <LanguageSwitch />
         </header>
 
         <div className="flex flex-1 items-center overflow-y-auto px-5 py-6">
@@ -463,10 +478,10 @@ function MobileAuthScreen({
                       <KeyRound
                         size={14}
                         aria-hidden="true"
-                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#74808e]"
+                        className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-[#74808e]"
                       />
                       <input
-                        className={`${fieldClass} pl-9 font-mono uppercase tracking-wider`}
+                        className={`${fieldClass} ps-9 font-mono uppercase tracking-wider`}
                         required
                         value={trainerCode}
                         onChange={(event) =>
@@ -707,6 +722,9 @@ export function MemberApp() {
     availability?: AvailabilitySlot[];
   } | null>(null);
   const [workoutPlan, setWorkoutPlan] = useState<WorkoutPlan | null>(null);
+  const [pendingWorkoutPlan, setPendingWorkoutPlan] = useState<PendingWorkoutOffer | null>(null);
+  const [isRespondingWorkout, setIsRespondingWorkout] = useState(false);
+  const [workoutDecisionNotice, setWorkoutDecisionNotice] = useState("");
   const [upcomingMemberSessions, setUpcomingMemberSessions] = useState<
     UpcomingMemberSession[]
   >([]);
@@ -786,6 +804,7 @@ export function MemberApp() {
         setTrainerProfile(null);
         setTrainer(null);
         setWorkoutPlan(null);
+        setPendingWorkoutPlan(null);
         setRecentVisits([]);
         setAuthStatus("unauthenticated");
         return false;
@@ -816,6 +835,7 @@ export function MemberApp() {
       }
       setTrainer(data.trainer ?? null);
       setWorkoutPlan(data.workoutPlan ?? null);
+      setPendingWorkoutPlan(data.pendingWorkoutPlan ?? null);
       setUpcomingMemberSessions(data.upcomingSessions ?? []);
       setRecentVisits(
         (data.visits ?? []).map((visit) =>
@@ -854,6 +874,62 @@ export function MemberApp() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [isAwaitingStaffAccept, loadMobilePortal]);
+
+  // Background refresh for enrolled members so staff-assigned workout routine prompts appear live
+  const isEnrolledMemberView =
+    authStatus === "authenticated" &&
+    accountRole === "member" &&
+    Boolean(member?.enrolledInGym);
+
+  useEffect(() => {
+    if (!isEnrolledMemberView) return;
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void loadMobilePortal();
+    }, 6000);
+    return () => window.clearInterval(timer);
+  }, [isEnrolledMemberView, loadMobilePortal]);
+
+  async function respondToPendingWorkout(decision: "accept" | "decline") {
+    if (!pendingWorkoutPlan || isRespondingWorkout) return;
+    setIsRespondingWorkout(true);
+    setDataError("");
+    setWorkoutDecisionNotice("");
+    try {
+      const response = await mobileFetch("/api/member-portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "respond-workout", decision }),
+      });
+      if (response.status === 401) {
+        clearMobileSessionToken();
+        setAuthStatus("unauthenticated");
+        return;
+      }
+      const data = await readMobileJson<{ error?: string; status?: string }>(
+        response,
+        "Unable to update workout routine.",
+      );
+      if (!response.ok) {
+        throw new Error(data.error ?? "Unable to update workout routine.");
+      }
+      const acceptedTitle = pendingWorkoutPlan.title;
+      setPendingWorkoutPlan(null);
+      await loadMobilePortal();
+      if (decision === "accept") {
+        setWorkoutDecisionNotice(`Workout routine updated to ${acceptedTitle}.`);
+        setActiveTab("Workout");
+      } else {
+        setWorkoutDecisionNotice("Workout routine change declined.");
+      }
+    } catch (error) {
+      setDataError(
+        error instanceof Error ? error.message : "Unable to update workout routine.",
+      );
+    } finally {
+      setIsRespondingWorkout(false);
+    }
+  }
 
   const currentMemberId = member?.id ?? "";
 
@@ -1455,15 +1531,19 @@ export function MemberApp() {
               G
             </span>
             <div>
-              <p className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]">
+              <p
+                data-no-translate="true"
+                className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+              >
                 Gym<span className="text-[#2d9d78]">OS</span>
               </p>
-              <p className="max-w-[160px] truncate text-[9px] uppercase tracking-wide text-[#8993a0]">
+              <p className="max-w-[140px] truncate text-[9px] uppercase tracking-wide text-[#8993a0]">
                 {member?.gymName ?? "Member App"}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <LanguageSwitch />
             <button
               type="button"
               onClick={() => void handleLogout()}
@@ -1505,6 +1585,98 @@ export function MemberApp() {
             >
               {dataError}
             </p>
+          )}
+
+          {workoutDecisionNotice && !pendingWorkoutPlan && (
+            <div
+              role="status"
+              className="mb-4 flex items-center justify-between gap-2 rounded-xl border border-[#cde9dc] bg-[#eaf6f0] px-3.5 py-2.5 text-[11px] font-medium text-[#237e5f]"
+            >
+              <span>{workoutDecisionNotice}</span>
+              <button
+                type="button"
+                onClick={() => setWorkoutDecisionNotice("")}
+                className="text-[10px] font-semibold underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {pendingWorkoutPlan && (
+            <section
+              role="region"
+              aria-label="Workout routine verification"
+              className="mb-4 rounded-2xl border border-[#cfe5d9] bg-white p-4 shadow-[0_8px_24px_rgba(39,137,104,0.08)]"
+            >
+              <div className="flex items-start gap-3">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#eaf6f0] text-[#278968]">
+                  <Dumbbell size={17} aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#278968]">
+                    Workout routine verification
+                  </p>
+                  <p className="mt-1 text-[13px] font-semibold text-[#243242]">
+                    Do you want to accept this workout routine change?
+                  </p>
+                  <p className="mt-1 text-[11px] text-[#687585]">
+                    <span className="font-semibold text-[#354153]">
+                      {pendingWorkoutPlan.title}
+                    </span>{" "}
+                    · {pendingWorkoutPlan.targetGoal} ({pendingWorkoutPlan.exercises.length}{" "}
+                    {pendingWorkoutPlan.exercises.length === 1 ? "exercise" : "exercises"})
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-[#8993a0]">
+                    Sent by {pendingWorkoutPlan.assignedBy}
+                  </p>
+                </div>
+              </div>
+
+              {pendingWorkoutPlan.exercises.length > 0 && (
+                <div className="mt-3 rounded-xl bg-[#f7f9fa] p-2.5">
+                  <ul className="space-y-1">
+                    {pendingWorkoutPlan.exercises.slice(0, 4).map((exercise) => (
+                      <li
+                        key={exercise.id}
+                        className="flex items-center justify-between gap-2 text-[10px] text-[#526071]"
+                      >
+                        <span className="truncate font-medium">{exercise.name}</span>
+                        <span className="shrink-0 text-[#8993a0]">
+                          {exercise.sets} × {exercise.reps}
+                        </span>
+                      </li>
+                    ))}
+                    {pendingWorkoutPlan.exercises.length > 4 && (
+                      <li className="text-[10px] text-[#8993a0]">
+                        +{pendingWorkoutPlan.exercises.length - 4} more exercises
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mt-3.5 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={isRespondingWorkout}
+                  onClick={() => void respondToPendingWorkout("decline")}
+                  className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border border-[#e3e8ec] bg-white px-3 text-[11px] font-semibold text-[#596575] hover:bg-[#f7f9fa] disabled:opacity-50"
+                >
+                  <X size={14} aria-hidden="true" />
+                  Decline
+                </button>
+                <button
+                  type="button"
+                  disabled={isRespondingWorkout}
+                  onClick={() => void respondToPendingWorkout("accept")}
+                  className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-[#278968] px-3 text-[11px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+                >
+                  <Check size={14} aria-hidden="true" />
+                  {isRespondingWorkout ? "Saving…" : "Accept Routine"}
+                </button>
+              </div>
+            </section>
           )}
 
           {activeTab === "Pass" && (

@@ -90,8 +90,17 @@ type MemberAssignment = {
   id: string;
   memberId: string;
   memberName: string;
-  trainerId: string;
+  trainerId: string | null;
   planId: string | null;
+  pendingPlanId: string | null;
+};
+
+type PendingWorkoutAssignment = {
+  memberId: string;
+  memberName: string;
+  workoutPlanId: string;
+  assignedBy: string;
+  assignedAt: string | null;
 };
 
 type Member = { id: string; name: string; phone?: string };
@@ -653,25 +662,24 @@ function AssignTrainerModal({
   error,
 }: AssignTrainerModalProps) {
   const [memberId, setMemberId] = useState(members[0]?.id ?? "");
-  const [trainerId, setTrainerId] = useState(trainers[0]?.id ?? "");
+  const [trainerId, setTrainerId] = useState("");
   const [planId, setPlanId] = useState(plans[0]?.id ?? "");
 
   useEffect(() => {
     if (!memberId && members.length) setMemberId(members[0].id);
-    if (!trainerId && trainers.length) setTrainerId(trainers[0].id);
     if (!planId && plans.length) setPlanId(plans[0].id);
-  }, [memberId, members, planId, plans, trainerId, trainers]);
+  }, [memberId, members, planId, plans]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!memberId || !trainerId || !planId) return;
+    if (!memberId || !planId) return;
     void onAssign(memberId, trainerId, planId);
   }
 
   return (
     <ModalFrame
-      title="Assign a trainer"
-      description="Connect a member with a trainer and workout plan."
+      title="Assign workout or trainer"
+      description="Assign a workout routine directly to a member (with or without a trainer). The member will confirm the routine in the Mobile App."
       onClose={onClose}
       className="max-w-[480px]"
     >
@@ -702,15 +710,15 @@ function AssignTrainerModal({
             htmlFor="assignment-trainer"
             className="mb-1.5 block text-[11px] font-medium text-[#526071]"
           >
-            Trainer
+            Trainer <span className="font-normal text-[#9aa3ae]">(optional)</span>
           </label>
           <select
             id="assignment-trainer"
             value={trainerId}
-            required
             onChange={(event) => setTrainerId(event.target.value)}
             className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994]"
           >
+            <option value="">No trainer (Workout routine only)</option>
             {trainers.map((trainer) => (
               <option key={trainer.id} value={trainer.id}>
                 {trainer.name} · {trainer.specialty}
@@ -739,6 +747,9 @@ function AssignTrainerModal({
             ))}
           </select>
         </div>
+        <p className="rounded-xl bg-[#f2faf5] px-3.5 py-2.5 text-[11px] leading-5 text-[#278968]">
+          The member will see a verification message in the Mobile App to accept or decline this workout routine change.
+        </p>
         {error && (
           <p
             role="alert"
@@ -757,10 +768,10 @@ function AssignTrainerModal({
           </button>
           <button
             type="submit"
-            disabled={isSaving || !members.length || !trainers.length || !plans.length}
+            disabled={isSaving || !members.length || !plans.length}
             className="min-h-10 rounded-lg bg-[#278968] px-4 text-[12px] font-semibold text-white hover:bg-[#207858] disabled:cursor-wait disabled:opacity-60"
           >
-            {isSaving ? "Saving…" : "Assign trainer"}
+            {isSaving ? "Saving…" : trainerId ? "Assign trainer & routine" : "Send workout routine"}
           </button>
         </div>
       </form>
@@ -1203,6 +1214,7 @@ export function TrainersPage() {
   const [invites, setInvites] = useState<TrainerInvite[]>([]);
   const [sessions, setSessions] = useState<CoachingSession[]>([]);
   const [plans, setPlans] = useState<WorkoutPlan[]>([]);
+  const [pendingAssignments, setPendingAssignments] = useState<PendingWorkoutAssignment[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -1246,6 +1258,7 @@ export function TrainersPage() {
           assignedMemberIds: string[];
           assignedMemberNames: string[];
         }>;
+        pendingAssignments?: PendingWorkoutAssignment[];
         error?: string;
       };
       if (!trainerResponse.ok) {
@@ -1285,6 +1298,7 @@ export function TrainersPage() {
           assignedMemberNames: plan.assignedMemberNames,
         })),
       );
+      setPendingAssignments(workoutData.pendingAssignments ?? []);
     } catch (error) {
       setApiError(
         error instanceof Error
@@ -1301,16 +1315,18 @@ export function TrainersPage() {
   }, [loadData]);
 
   const assignments: MemberAssignment[] = members.flatMap((member) => {
-    const trainer = trainers.find((item) => item.assignedMemberIds.includes(member.id));
-    if (!trainer) return [];
+    const trainer = trainers.find((item) => item.assignedMemberIds.includes(member.id)) ?? null;
     const plan = plans.find((item) => item.assignedMemberIds.includes(member.id)) ?? null;
+    const pendingItem = pendingAssignments.find((item) => item.memberId === member.id) ?? null;
+    if (!trainer && !plan && !pendingItem) return [];
     return [
       {
         id: member.id,
         memberId: member.id,
         memberName: member.name,
-        trainerId: trainer.id,
+        trainerId: trainer?.id ?? null,
         planId: plan?.id ?? null,
+        pendingPlanId: pendingItem?.workoutPlanId ?? null,
       },
     ];
   });
@@ -1436,7 +1452,11 @@ export function TrainersPage() {
     setIsSaving(true);
     setApiError("");
     try {
-      await postJson("/api/trainers", { action: "assign", memberId, trainerId });
+      if (trainerId) {
+        await postJson("/api/trainers", { action: "assign", memberId, trainerId });
+      } else {
+        await postJson("/api/trainers", { action: "unassign", memberId });
+      }
       await postJson("/api/workouts", {
         action: "assign",
         memberId,
@@ -1555,7 +1575,7 @@ export function TrainersPage() {
               className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-[#278968] px-4 text-[12px] font-semibold text-white shadow-sm hover:bg-[#207858]"
             >
               <UserRoundPlus size={15} aria-hidden="true" />
-              Assign Trainer
+              Assign Workout / Trainer
             </button>
           </div>
         </div>
@@ -2033,11 +2053,16 @@ export function TrainersPage() {
                 </thead>
                 <tbody className="divide-y divide-[#eff1f4]">
                   {assignments.map((assignment) => {
-                    const trainer = trainers.find((item) => item.id === assignment.trainerId);
+                    const trainer = assignment.trainerId
+                      ? trainers.find((item) => item.id === assignment.trainerId)
+                      : null;
                     const plan = assignment.planId
                       ? plans.find((item) => item.id === assignment.planId)
                       : null;
-                    if (!trainer) return null;
+                    const pendingPlan = assignment.pendingPlanId
+                      ? plans.find((item) => item.id === assignment.pendingPlanId)
+                      : null;
+                    const previewTarget = pendingPlan ?? plan;
                     return (
                       <tr
                         key={assignment.id}
@@ -2050,22 +2075,33 @@ export function TrainersPage() {
                           {assignment.memberName}
                         </th>
                         <td className="px-5 py-4 text-[11px] text-[#596575]">
-                          {trainer.name}
+                          {trainer ? (
+                            trainer.name
+                          ) : (
+                            <span className="text-[#8993a0]">No trainer assigned</span>
+                          )}
                         </td>
                         <td className="px-5 py-4 text-[11px] text-[#596575]">
-                          {plan ? plan.title : "Pending coach selection"}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span>{plan ? plan.title : pendingPlan ? pendingPlan.title : "Pending coach selection"}</span>
+                            {pendingPlan && (
+                              <span className="rounded-full bg-[#fff4e8] px-2 py-0.5 text-[9px] font-semibold text-[#bd7838]">
+                                Pending member verification{plan ? ` (${pendingPlan.title})` : ""}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-5 py-4">
                           <span className="rounded-full bg-[#f2f4f6] px-2.5 py-1 text-[9px] font-medium text-[#6f7b89]">
-                            {plan ? plan.goal : "Coach assigned"}
+                            {plan ? plan.goal : pendingPlan ? pendingPlan.goal : "Coach assigned"}
                           </span>
                         </td>
                         <td className="px-5 py-4">
-                          {plan ? (
+                          {previewTarget ? (
                             <button
                               type="button"
-                              onClick={() => setPreviewPlanId(plan.id)}
-                              aria-label={`Preview ${plan.title} for ${assignment.memberName}`}
+                              onClick={() => setPreviewPlanId(previewTarget.id)}
+                              aria-label={`Preview ${previewTarget.title} for ${assignment.memberName}`}
                               className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-[#e3e8ec] px-2.5 text-[10px] font-medium text-[#687585] hover:bg-[#f7f9fa]"
                             >
                               Preview

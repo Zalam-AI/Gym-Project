@@ -163,7 +163,7 @@ export async function middleware(request: NextRequest) {
 
   if (
     pathname === "/api/member-portal" &&
-    (request.method === "GET" || request.method === "OPTIONS")
+    (request.method === "GET" || request.method === "POST" || request.method === "OPTIONS")
   ) {
     return NextResponse.next();
   }

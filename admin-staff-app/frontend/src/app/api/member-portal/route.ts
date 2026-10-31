@@ -222,33 +222,47 @@ export async function GET(request: NextRequest) {
 
     const today = startOfGymDay(new Date(), gym.timezone);
 
-    const [latestPayment, workoutDoc, trainerDoc, visits, sessionDocs] = await Promise.all([
-      PaymentModel.findOne({ gymId: memberGymId, memberId: member._id }).sort({ date: -1 }),
-      WorkoutPlanModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
-        updatedAt: -1,
-      }),
-      TrainerModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
-        updatedAt: -1,
-      }),
-      AttendanceModel.find({ gymId: memberGymId, memberId: member._id })
-        .sort({ checkInTime: -1 })
-        .limit(20),
-      TrainingSessionModel.find({
-        gymId: memberGymId,
-        memberId: member._id,
-        status: "scheduled",
-        startsAt: { $gte: today },
-      })
-        .populate({
-          path: "trainerId",
-          model: TrainerModel,
-          match: { gymId: memberGymId },
-          select: "name specialty",
+    const rawPendingPlanId = (
+      member as unknown as { pendingWorkoutPlanId?: Types.ObjectId | null }
+    ).pendingWorkoutPlanId;
+    const rawPendingAssignedAt = (
+      member as unknown as { pendingWorkoutAssignedAt?: Date | null }
+    ).pendingWorkoutAssignedAt;
+    const rawPendingAssignedBy = (
+      member as unknown as { pendingWorkoutAssignedBy?: string }
+    ).pendingWorkoutAssignedBy;
+
+    const [latestPayment, workoutDoc, pendingWorkoutDoc, trainerDoc, visits, sessionDocs] =
+      await Promise.all([
+        PaymentModel.findOne({ gymId: memberGymId, memberId: member._id }).sort({ date: -1 }),
+        WorkoutPlanModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
+          updatedAt: -1,
+        }),
+        rawPendingPlanId && Types.ObjectId.isValid(String(rawPendingPlanId))
+          ? WorkoutPlanModel.findOne({ _id: rawPendingPlanId, gymId: memberGymId })
+          : Promise.resolve(null),
+        TrainerModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
+          updatedAt: -1,
+        }),
+        AttendanceModel.find({ gymId: memberGymId, memberId: member._id })
+          .sort({ checkInTime: -1 })
+          .limit(20),
+        TrainingSessionModel.find({
+          gymId: memberGymId,
+          memberId: member._id,
+          status: "scheduled",
+          startsAt: { $gte: today },
         })
-        .sort({ startsAt: 1 })
-        .limit(10)
-        .lean(),
-    ]);
+          .populate({
+            path: "trainerId",
+            model: TrainerModel,
+            match: { gymId: memberGymId },
+            select: "name specialty",
+          })
+          .sort({ startsAt: 1 })
+          .limit(10)
+          .lean(),
+      ]);
 
     const membership = membershipDoc as unknown as MembershipRecord;
     const membershipStatus =
@@ -326,6 +340,31 @@ export async function GET(request: NextRequest) {
             })),
           }
         : null,
+      pendingWorkoutPlan: pendingWorkoutDoc
+        ? {
+            id: pendingWorkoutDoc._id.toString(),
+            title: pendingWorkoutDoc.title,
+            targetGoal: pendingWorkoutDoc.targetGoal,
+            assignedBy: rawPendingAssignedBy || gym.name,
+            assignedAt: rawPendingAssignedAt ? new Date(rawPendingAssignedAt).toISOString() : null,
+            exercises: (
+              pendingWorkoutDoc.exercises as Array<{
+                exerciseName: string;
+                sets: string;
+                reps: string;
+                restTime: string;
+                targetMuscleGroup: string;
+              }>
+            ).map((exercise, index) => ({
+              id: index + 1,
+              name: exercise.exerciseName,
+              sets: exercise.sets,
+              reps: exercise.reps,
+              rest: exercise.restTime,
+              muscle: exercise.targetMuscleGroup,
+            })),
+          }
+        : null,
       upcomingSessions: sessionDocs.map((item) => {
         const populatedTrainer = item.trainerId as unknown as {
           _id?: Types.ObjectId;
@@ -355,6 +394,177 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("Failed to fetch member portal data:", error);
     return memberApiResponse(request, { error: "Unable to fetch member data at this time." }, 503);
+  }
+}
+
+export async function POST(request: NextRequest) {
+  if (!isAllowedMemberOrigin(request)) {
+    return memberApiResponse(request, { error: "Origin is not allowed." }, 403);
+  }
+  const session = await verifyMemberSessionToken(
+    getMemberTokenFromRequest(request, request.cookies.get(MEMBER_SESSION_COOKIE)?.value),
+  );
+  if (!session) {
+    const [staffAttempt, platformAttempt] = await Promise.all([
+      verifyStaffSessionToken(
+        getStaffTokenFromRequest(request, request.cookies.get(STAFF_SESSION_COOKIE)?.value),
+      ),
+      verifyPlatformSessionToken(
+        getPlatformTokenFromRequest(request, request.cookies.get(PLATFORM_SESSION_COOKIE)?.value),
+      ),
+    ]);
+    if (staffAttempt || platformAttempt) {
+      return memberApiResponse(request, { error: "Member account permissions are required." }, 403);
+    }
+    return memberApiResponse(request, { error: "Member authentication is required." }, 401);
+  }
+  if (session.role !== "member" || !Types.ObjectId.isValid(session.memberId)) {
+    return memberApiResponse(request, { error: "Member account permissions are required." }, 403);
+  }
+
+  let body: Record<string, unknown> | null = null;
+  try {
+    const raw: unknown = await request.json();
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      body = raw as Record<string, unknown>;
+    }
+  } catch {
+    return memberApiResponse(request, { error: "Request body must be valid JSON." }, 400);
+  }
+  if (!body) {
+    return memberApiResponse(request, { error: "Request body must be a JSON object." }, 400);
+  }
+
+  try {
+    await connectToDatabase();
+    const member = await MemberModel.findById(session.memberId);
+    if (!member) {
+      return memberApiResponse(request, { error: "Member authentication is required." }, 401);
+    }
+    if (member.status === "suspended") {
+      return memberApiResponse(
+        request,
+        { error: "Your member account is currently suspended." },
+        403,
+      );
+    }
+    if (!member.gymId || !Types.ObjectId.isValid(String(member.gymId))) {
+      return memberApiResponse(
+        request,
+        { error: "Your account is not enrolled in a gym." },
+        400,
+      );
+    }
+    const memberGymId = new Types.ObjectId(String(member.gymId));
+    if (session.gymId && session.gymId !== memberGymId.toString()) {
+      return memberApiResponse(
+        request,
+        { error: "Member gym relationship could not be verified." },
+        403,
+      );
+    }
+    const gym = await GymModel.findById(memberGymId).select("slug status");
+    if (!gym || gym.status !== "active") {
+      return memberApiResponse(
+        request,
+        { error: "This gym workspace is currently suspended." },
+        403,
+      );
+    }
+    if (hasConflictingGymRef(request, { id: memberGymId.toString(), slug: gym.slug }, body)) {
+      return memberApiResponse(
+        request,
+        { error: "Cross-gym access denied." },
+        403,
+      );
+    }
+
+    if (body.action !== "respond-workout") {
+      return memberApiResponse(request, { error: "Unsupported member portal action." }, 400);
+    }
+    const decision = body.decision;
+    if (decision !== "accept" && decision !== "decline") {
+      return memberApiResponse(request, { error: "decision must be accept or decline." }, 400);
+    }
+
+    const rawPendingPlanId = (
+      member as unknown as { pendingWorkoutPlanId?: Types.ObjectId | null }
+    ).pendingWorkoutPlanId;
+
+    if (!rawPendingPlanId || !Types.ObjectId.isValid(String(rawPendingPlanId))) {
+      return memberApiResponse(
+        request,
+        { error: "No pending workout routine change was found." },
+        404,
+      );
+    }
+
+    if (decision === "accept") {
+      const targetPlan = await WorkoutPlanModel.findOne({
+        _id: rawPendingPlanId,
+        gymId: memberGymId,
+      });
+      if (!targetPlan) {
+        await MemberModel.updateOne(
+          { _id: member._id, gymId: memberGymId },
+          {
+            $set: {
+              pendingWorkoutPlanId: null,
+              pendingWorkoutAssignedAt: null,
+              pendingWorkoutAssignedBy: "",
+            },
+          },
+        );
+        return memberApiResponse(
+          request,
+          { error: "The proposed workout routine is no longer available." },
+          404,
+        );
+      }
+
+      await WorkoutPlanModel.updateMany(
+        { gymId: memberGymId, assignedMemberIds: member._id },
+        { $pull: { assignedMemberIds: member._id } },
+      );
+      await WorkoutPlanModel.updateOne(
+        { _id: targetPlan._id, gymId: memberGymId },
+        { $addToSet: { assignedMemberIds: member._id } },
+      );
+      await MemberModel.updateOne(
+        { _id: member._id, gymId: memberGymId },
+        {
+          $set: {
+            pendingWorkoutPlanId: null,
+            pendingWorkoutAssignedAt: null,
+            pendingWorkoutAssignedBy: "",
+          },
+        },
+      );
+      return memberApiResponse(request, {
+        ok: true,
+        decision: "accept",
+        workoutPlanId: targetPlan._id.toString(),
+      });
+    }
+
+    await MemberModel.updateOne(
+      { _id: member._id, gymId: memberGymId },
+      {
+        $set: {
+          pendingWorkoutPlanId: null,
+          pendingWorkoutAssignedAt: null,
+          pendingWorkoutAssignedBy: "",
+        },
+      },
+    );
+    return memberApiResponse(request, { ok: true, decision: "decline" });
+  } catch (error) {
+    console.error("Failed to process member portal action:", error);
+    return memberApiResponse(
+      request,
+      { error: "Unable to update your workout routine right now." },
+      503,
+    );
   }
 }
 

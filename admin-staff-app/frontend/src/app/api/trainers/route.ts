@@ -238,6 +238,27 @@ export async function POST(request: Request) {
       });
     }
 
+    if (input.action === "unassign") {
+      const memberId = typeof input.memberId === "string" ? input.memberId : "";
+      if (!Types.ObjectId.isValid(memberId)) {
+        return NextResponse.json({ error: "Valid memberId is required." }, { status: 400 });
+      }
+      const member = await MemberModel.findOne({ _id: memberId, gymId });
+      if (!member) {
+        return NextResponse.json(
+          { error: "Member was not found for this gym." },
+          { status: 404 },
+        );
+      }
+      await TrainerModel.updateMany(
+        { gymId, assignedMemberIds: member._id },
+        { $pull: { assignedMemberIds: member._id } },
+      );
+      return NextResponse.json({
+        assignment: { trainerId: null, memberId: member._id.toString() },
+      });
+    }
+
     if (input.action === "generate-code") {
       const linkedTrainerId =
         typeof input.trainerId === "string" && input.trainerId.trim()

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, Lock, Shield } from "lucide-react";
+import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearPlatformSessionToken,
   ensurePlatformFetchPatched,
@@ -85,6 +86,9 @@ export function PlatformLoginPage() {
   return (
     <main className="grid min-h-screen place-items-center bg-[#0f172a] px-5 py-10 text-slate-100">
       <div className="w-full max-w-[440px]">
+        <div className="mb-4 flex justify-end">
+          <LanguageSwitch variant="dark" />
+        </div>
         <div className="mb-7 flex items-center justify-center gap-3">
           <span className="grid size-10 place-items-center rounded-xl bg-indigo-500 text-sm font-bold text-white shadow-lg shadow-indigo-500/25">
             <Shield size={19} aria-hidden="true" />
@@ -162,7 +166,7 @@ export function PlatformLoginPage() {
               className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 text-[13px] font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-wait disabled:opacity-65"
             >
               <span>{pending ? "Verifying credentials…" : "Sign in to Platform Console"}</span>
-              {!pending && <ArrowRight size={15} aria-hidden="true" />}
+              {!pending && <ArrowRight size={15} className="rtl-flip" aria-hidden="true" />}
             </button>
           </form>
         </div>

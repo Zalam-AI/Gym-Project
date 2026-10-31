@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } 
 import { Check, CheckCircle2, Plus, RefreshCw, Smartphone, X } from "lucide-react";
 import { AppShell, type PendingMembershipRequest } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
+import { useLanguage } from "@/lib/i18n";
 
 type Plan = {
   id: string;
@@ -20,6 +21,9 @@ type Subscription = {
   memberId: string;
   memberName: string;
   planId: string;
+  planName?: string;
+  planPrice?: number;
+  planDurationMonths?: number;
   startDate: string;
   expirationDate: string;
   paymentStatus: "Paid" | "Pending";
@@ -137,6 +141,7 @@ type AddPlanModalProps = {
 };
 
 function AddPlanModal({ onClose, onAdd, isSaving, error }: AddPlanModalProps) {
+  const { t } = useLanguage();
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [durationMonths, setDurationMonths] = useState("1");
@@ -199,7 +204,9 @@ function AddPlanModal({ onClose, onAdd, isSaving, error }: AddPlanModalProps) {
               className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
             >
               {[1, 2, 3, 6, 9, 12, 24].map((months) => (
-                <option key={months} value={months}>{months} {months === 1 ? "month" : "months"}</option>
+                <option key={months} value={months}>
+                  {t(`${months} ${months === 1 ? "month" : "months"}`)}
+                </option>
               ))}
             </select>
           </div>
@@ -309,6 +316,62 @@ function RenewalModal({ subscription, plan, onClose, onConfirm, isSaving, error 
   );
 }
 
+type RemovePlanModalProps = {
+  plan: Plan;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+  isSaving: boolean;
+  error: string;
+};
+
+function RemovePlanModal({
+  plan,
+  onClose,
+  onConfirm,
+  isSaving,
+  error,
+}: RemovePlanModalProps) {
+  return (
+    <ModalFrame
+      title="Remove membership plan"
+      description={`Are you sure you want to remove "${plan.name}"?`}
+      onClose={onClose}
+    >
+      <div className="mb-5 rounded-xl bg-[#fff8f7] p-4 text-[12px] text-[#526071]">
+        <p className="font-semibold text-[#354153]">
+          {plan.name} · {formatEgp(plan.price)}
+        </p>
+        <p className="mt-1 text-[11px] text-[#788391]">
+          This plan will be removed from your active plans list. Existing member subscriptions will not be affected.
+        </p>
+      </div>
+      {error && (
+        <p role="alert" className="mb-4 rounded-lg bg-[#fff1ef] px-3 py-2 text-[12px] text-[#a9433b]">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-col-reverse gap-2 border-t border-[#edf0f2] pt-5 sm:flex-row sm:justify-end">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={isSaving}
+          className="min-h-10 rounded-lg border border-[#e3e8ec] px-4 text-[12px] font-medium text-[#596575] hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={isSaving}
+          onClick={() => void onConfirm()}
+          className="min-h-10 rounded-lg bg-[#c4544c] px-4 text-[12px] font-semibold text-white hover:bg-[#ad433b] disabled:cursor-wait disabled:opacity-60"
+        >
+          {isSaving ? "Removing…" : "Yes, remove plan"}
+        </button>
+      </div>
+    </ModalFrame>
+  );
+}
+
 export function MembershipsPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
@@ -318,6 +381,7 @@ export function MembershipsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [apiError, setApiError] = useState("");
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
+  const [removingPlan, setRemovingPlan] = useState<Plan | null>(null);
   const [renewingSubscriptionId, setRenewingSubscriptionId] = useState<string | null>(null);
 
   async function loadMemberships() {
@@ -390,8 +454,44 @@ export function MembershipsPage() {
     }
   }
 
+  async function removePlan() {
+    if (!removingPlan) return;
+    setIsSaving(true);
+    setApiError("");
+    try {
+      const response = await fetch("/api/memberships", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete-plan", planId: removingPlan.id }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Unable to remove this plan.");
+      setRemovingPlan(null);
+      window.dispatchEvent(new CustomEvent("gymos:membership-updated"));
+      await loadMemberships();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Unable to remove this plan.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   const renewingSubscription = subscriptions.find((subscription) => subscription.id === renewingSubscriptionId);
-  const renewingPlan = renewingSubscription && plans.find((plan) => plan.id === renewingSubscription.planId);
+  const renewingPlan: Plan | undefined = renewingSubscription
+    ? plans.find((plan) => plan.id === renewingSubscription.planId) ??
+      (renewingSubscription.planName
+        ? {
+            id: renewingSubscription.planId,
+            name: renewingSubscription.planName,
+            price: renewingSubscription.planPrice ?? 0,
+            durationMonths: renewingSubscription.planDurationMonths ?? 1,
+            durationLabel: `${renewingSubscription.planDurationMonths ?? 1} ${
+              (renewingSubscription.planDurationMonths ?? 1) === 1 ? "month" : "months"
+            }`,
+            benefits: [],
+          }
+        : undefined)
+    : undefined;
 
   async function confirmRenewal(startDate: string, paymentStatus: Subscription["paymentStatus"]) {
     if (!renewingSubscription || !renewingPlan) return;
@@ -427,7 +527,7 @@ export function MembershipsPage() {
           <h1 className="text-[24px] font-semibold tracking-[-0.045em] text-[#1f2b39] sm:text-[28px]">Memberships</h1>
           <p className="mt-1.5 text-[13px] text-[#788391]">Manage your plans, subscriptions, and upcoming renewals.</p>
         </div>
-        {apiError && !isPlanModalOpen && renewingSubscriptionId === null && (
+        {apiError && !isPlanModalOpen && !removingPlan && renewingSubscriptionId === null && (
           <p role="alert" className="mb-5 rounded-lg border border-[#f1d2cd] bg-[#fff6f4] px-4 py-3 text-[12px] text-[#a9433b]">{apiError}</p>
         )}
 
@@ -517,12 +617,26 @@ export function MembershipsPage() {
                 key={plan.id}
                 className={`relative flex flex-col p-5 sm:p-6 ${plan.featured ? "border-[#cde9dc] shadow-[0_4px_18px_rgba(45,157,120,0.08)]" : ""}`}
               >
-                {plan.featured && (
-                  <span className="absolute right-5 top-5 rounded-full bg-[#eaf6f0] px-2.5 py-1 text-[9px] font-semibold text-[#278968]">
-                    BEST VALUE
-                  </span>
-                )}
-                <p className="pr-20 text-[13px] font-semibold text-[#354153]">{plan.name}</p>
+                <div className="absolute end-4 top-4 flex items-center gap-1.5">
+                  {plan.featured && (
+                    <span className="rounded-full bg-[#eaf6f0] px-2.5 py-1 text-[9px] font-semibold text-[#278968]">
+                      BEST VALUE
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`Remove plan ${plan.name}`}
+                    title="Remove plan"
+                    onClick={() => {
+                      setApiError("");
+                      setRemovingPlan(plan);
+                    }}
+                    className="grid size-6 place-items-center rounded-md text-[#8993a0] transition-colors hover:bg-[#fff0ee] hover:text-[#c4544c]"
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </div>
+                <p className="pe-28 text-[13px] font-semibold text-[#354153]">{plan.name}</p>
                 <div className="mt-4 flex items-baseline gap-1.5">
                   <span className="text-[27px] font-semibold leading-none tracking-[-0.045em] text-[#253243]">{formatEgp(plan.price)}</span>
                   <span className="text-[11px] text-[#8993a0]">/ {plan.durationLabel}</span>
@@ -568,10 +682,11 @@ export function MembershipsPage() {
                   )}
                   {subscriptions.map((subscription) => {
                     const plan = plans.find((item) => item.id === subscription.planId);
+                    const displayPlanName = plan?.name ?? subscription.planName;
                     return (
                       <tr key={subscription.id} className="transition-colors hover:bg-[#fbfcfc]">
                         <th scope="row" className="px-5 py-4 text-[12px] font-semibold text-[#354153]">{subscription.memberName}</th>
-                        <td className="px-5 py-4 text-[12px] text-[#596575]">{plan?.name ?? "Plan unavailable"}</td>
+                        <td className="px-5 py-4 text-[12px] text-[#596575]">{displayPlanName ?? "Plan unavailable"}</td>
                         <td className="px-5 py-4 text-[12px] text-[#6f7b89]">{formatDate(subscription.startDate)}</td>
                         <td className="px-5 py-4 text-[12px] text-[#6f7b89]">{formatDate(subscription.expirationDate)}</td>
                         <td className="px-5 py-4">
@@ -592,7 +707,7 @@ export function MembershipsPage() {
                           <button
                             type="button"
                             onClick={() => setRenewingSubscriptionId(subscription.id)}
-                            disabled={!plan}
+                            disabled={!displayPlanName}
                             aria-label={`Renew membership for ${subscription.memberName}`}
                             className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-lg border border-[#dce7e1] bg-white px-2.5 text-[10px] font-semibold text-[#278968] hover:bg-[#f1f8f4] disabled:cursor-not-allowed disabled:opacity-50"
                           >
@@ -615,6 +730,20 @@ export function MembershipsPage() {
       </main>
       {isPlanModalOpen && (
         <AddPlanModal onClose={() => setIsPlanModalOpen(false)} onAdd={addPlan} isSaving={isSaving} error={apiError} />
+      )}
+      {removingPlan && (
+        <RemovePlanModal
+          plan={removingPlan}
+          onClose={() => {
+            if (!isSaving) {
+              setRemovingPlan(null);
+              setApiError("");
+            }
+          }}
+          onConfirm={removePlan}
+          isSaving={isSaving}
+          error={apiError}
+        />
       )}
       {renewingSubscription && renewingPlan && (
         <RenewalModal

@@ -601,10 +601,22 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      await WorkoutPlanModel.updateMany(
-        { gymId, assignedMemberIds: member._id },
-        { $pull: { assignedMemberIds: member._id } },
-      );
+      await Promise.all([
+        WorkoutPlanModel.updateMany(
+          { gymId, assignedMemberIds: member._id },
+          { $pull: { assignedMemberIds: member._id } },
+        ),
+        MemberModel.updateOne(
+          { _id: member._id, gymId },
+          {
+            $set: {
+              pendingWorkoutPlanId: null,
+              pendingWorkoutAssignedAt: null,
+              pendingWorkoutAssignedBy: "",
+            },
+          },
+        ),
+      ]);
       await WorkoutPlanModel.updateOne(
         { _id: plan._id, gymId },
         { $addToSet: { assignedMemberIds: member._id } },

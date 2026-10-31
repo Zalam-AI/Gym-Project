@@ -13,6 +13,20 @@ const memberSchema = new Schema(
       default: "active",
       required: true,
     },
+    pendingWorkoutPlanId: {
+      type: Schema.Types.ObjectId,
+      ref: "WorkoutPlan",
+      default: null,
+    },
+    pendingWorkoutAssignedAt: {
+      type: Date,
+      default: null,
+    },
+    pendingWorkoutAssignedBy: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     joinDate: { type: Date, required: true, default: Date.now },
   },
   { timestamps: { createdAt: true, updatedAt: false } },
