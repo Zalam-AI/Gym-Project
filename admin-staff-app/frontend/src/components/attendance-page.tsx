@@ -391,7 +391,7 @@ export function AttendancePage() {
                 <Search
                   size={17}
                   aria-hidden="true"
-                  className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#9aa3ae]"
+                  className="pointer-events-none absolute start-3.5 top-1/2 -translate-y-1/2 text-[#9aa3ae]"
                 />
                 <label htmlFor="member-search" className="sr-only">
                   Member or trainer ID, name, or phone
@@ -406,7 +406,7 @@ export function AttendancePage() {
                   }}
                   placeholder="Enter member or trainer name, ID, or phone..."
                   autoComplete="off"
-                  className="min-h-12 w-full rounded-xl border border-[#e3e8ec] bg-white pl-10 pr-4 text-[13px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+                  className="min-h-12 w-full rounded-xl border border-[#e3e8ec] bg-white ps-10 pe-4 text-[13px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
                 />
                 {suggestions.length > 0 && !selectedKey && (
                   <ul
@@ -418,7 +418,7 @@ export function AttendancePage() {
                         <button
                           type="button"
                           onClick={() => choosePerson(person)}
-                          className="flex min-h-12 w-full items-center gap-3 px-3 text-left hover:bg-[#f7f9fa]"
+                          className="flex min-h-12 w-full items-center gap-3 px-3 text-start hover:bg-[#f7f9fa]"
                         >
                           <span
                             className={`grid size-8 shrink-0 place-items-center rounded-full text-[10px] font-semibold ${

@@ -133,3 +133,32 @@ a:focus-visible {
     display: none !important;
   }
 }
+
+html[dir="rtl"] body {
+  font-family: "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
+}
+
+html[dir="rtl"] * {
+  letter-spacing: 0 !important;
+}
+
+html[dir="rtl"] .font-mono {
+  direction: ltr;
+  unicode-bidi: embed;
+  letter-spacing: 0.04em !important;
+}
+
+html[dir="rtl"] input[type="email"],
+html[dir="rtl"] input[type="tel"],
+html[dir="rtl"] input[type="url"] {
+  direction: ltr;
+  text-align: right;
+}
+
+html[dir="rtl"] table.text-left {
+  text-align: right;
+}
+
+html[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}

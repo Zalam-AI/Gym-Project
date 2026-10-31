@@ -20,8 +20,11 @@ const cache = (globalThis.mongooseCache ??= {
 });
 
 export async function connectToDatabase(): Promise<Mongoose> {
-  if (cache.conn) {
+  if (cache.conn && mongoose.connection.readyState === 1) {
     return cache.conn;
+  }
+  if (mongoose.connection.readyState !== 1) {
+    cache.conn = null;
   }
 
   function isTransientDnsError(error: unknown): boolean {
@@ -98,7 +101,7 @@ export async function connectToDatabase(): Promise<Mongoose> {
       try {
         return await mongoose.connect(uri, {
           bufferCommands: false,
-          serverSelectionTimeoutMS: 10000,
+          serverSelectionTimeoutMS: uri.startsWith("mongodb+srv://") ? 10000 : 3500,
         });
       } catch (error) {
         lastError = error;

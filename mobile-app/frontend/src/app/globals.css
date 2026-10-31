@@ -61,3 +61,35 @@ a:focus-visible {
     transform: scale(1);
   }
 }
+
+html[dir="rtl"] body {
+  font-family: "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
+}
+
+html[dir="rtl"] * {
+  letter-spacing: 0 !important;
+}
+
+html[dir="rtl"] .font-mono {
+  direction: ltr;
+  unicode-bidi: embed;
+  letter-spacing: 0.04em !important;
+}
+
+html[dir="rtl"] input[type="email"],
+html[dir="rtl"] input[type="tel"] {
+  direction: ltr;
+  text-align: right;
+}
+
+html[dir="rtl"] .text-left {
+  text-align: right;
+}
+
+html[dir="rtl"] .text-right {
+  text-align: left;
+}
+
+html[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}

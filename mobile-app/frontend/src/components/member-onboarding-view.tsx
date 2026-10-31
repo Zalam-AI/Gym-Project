@@ -16,6 +16,7 @@ import {
   Smartphone,
   Sparkles,
 } from "lucide-react";
+import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearMobileSessionToken,
   mobileFetch,
@@ -224,7 +225,10 @@ export function MemberOnboardingView({
               G
             </span>
             <div>
-              <p className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]">
+              <p
+                data-no-translate="true"
+                className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+              >
                 Gym<span className="text-[#2d9d78]">OS</span>
               </p>
               <p className="text-[9px] uppercase tracking-wide text-[#8993a0]">
@@ -232,7 +236,8 @@ export function MemberOnboardingView({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <LanguageSwitch />
             <button
               type="button"
               onClick={() => void onLogout()}
@@ -467,16 +472,23 @@ export function MemberOnboardingView({
                     {(["Cash", "Card", "Instapay"] as const).map((method) => {
                       const meta = PAYMENT_METHOD_META[method];
                       const Icon = meta.icon;
-                      const active = paymentMethod === method;
+                      const isDisabled = method === "Card" || method === "Instapay";
+                      const active = !isDisabled && paymentMethod === method;
                       return (
                         <button
                           key={method}
                           type="button"
-                          onClick={() => setPaymentMethod(method)}
+                          disabled={isDisabled}
+                          aria-disabled={isDisabled}
+                          onClick={() => {
+                            if (!isDisabled) setPaymentMethod(method);
+                          }}
                           className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition-all ${
-                            active
-                              ? "border-[#278968] bg-[#eaf6f0] text-[#237e5f] ring-2 ring-[#278968]/15"
-                              : "border-[#e6eaee] bg-white text-[#526071] hover:border-[#cad4dc]"
+                            isDisabled
+                              ? "cursor-not-allowed border-[#e6eaee] bg-[#f3f5f7] text-[#a6b0bc] opacity-65"
+                              : active
+                                ? "border-[#278968] bg-[#eaf6f0] text-[#237e5f] ring-2 ring-[#278968]/15"
+                                : "border-[#e6eaee] bg-white text-[#526071] hover:border-[#cad4dc]"
                           }`}
                         >
                           <Icon size={18} aria-hidden="true" />

@@ -19,6 +19,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearMobileSessionToken,
   mobileFetch,
@@ -294,19 +295,23 @@ export function TrainerPortalView({
             </span>
             <div>
               <div className="flex items-center gap-1.5">
-                <p className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]">
+                <p
+                  data-no-translate="true"
+                  className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+                >
                   Gym<span className="text-[#2d9d78]">OS</span>
                 </p>
                 <span className="rounded-full bg-[#eef2ff] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-[#3f64a8]">
                   Coach
                 </span>
               </div>
-              <p className="max-w-[160px] truncate text-[9px] uppercase tracking-wide text-[#8993a0]">
+              <p className="max-w-[130px] truncate text-[9px] uppercase tracking-wide text-[#8993a0]">
                 {trainer.gymName}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <LanguageSwitch />
             <button
               type="button"
               onClick={() => void onLogout()}

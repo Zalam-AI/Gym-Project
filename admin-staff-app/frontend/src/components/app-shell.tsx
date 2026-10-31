@@ -5,6 +5,7 @@ import { Bell, Check, CheckCircle2, ChevronDown, LoaderCircle, Menu, X } from "l
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Sidebar, type NavigationPage } from "@/components/sidebar";
+import { LanguageSwitch, useLanguage } from "@/lib/i18n";
 import {
   clearStaffSessionToken,
   ensureStaffFetchPatched,
@@ -48,6 +49,7 @@ function formatEgp(amount: number) {
 
 export function AppShell({ activePage, children }: AppShellProps) {
   const router = useRouter();
+  const { lang, t } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -69,13 +71,13 @@ export function AppShell({ activePage, children }: AppShellProps) {
 
   useEffect(() => {
     setTodayLabel(
-      new Intl.DateTimeFormat("en-US", {
+      new Intl.DateTimeFormat(lang === "ar" ? "ar-EG" : "en-US", {
         weekday: "long",
         month: "long",
         day: "numeric",
       }).format(new Date()),
     );
-  }, []);
+  }, [lang]);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -255,12 +257,12 @@ export function AppShell({ activePage, children }: AppShellProps) {
         gymAccentColor={gymAccentColor}
       />
 
-      <div className="min-h-screen md:pl-[220px] lg:pl-[248px]">
+      <div className="min-h-screen md:ps-[220px] lg:ps-[248px]">
         <header className="sticky top-0 z-20 flex h-[68px] items-center justify-between border-b border-[#e9edf1] bg-white/95 px-4 backdrop-blur sm:px-7 lg:px-9">
           <div className="flex items-center gap-3">
             <button
               type="button"
-              aria-label="Open navigation menu"
+              aria-label={t("Open navigation menu")}
               aria-expanded={menuOpen}
               aria-controls="primary-navigation"
               onClick={() => setMenuOpen(true)}
@@ -270,14 +272,16 @@ export function AppShell({ activePage, children }: AppShellProps) {
             </button>
             <div>
               <p className="text-[11px] text-[#9099a5]">
-                {gymName ? `${gymName} · ` : ""}Welcome, {accountName.split(/\s+/)[0]}
+                {gymName ? `${gymName} · ` : ""}
+                {t(`Welcome, ${accountName.split(/\s+/)[0]}`)}
               </p>
               <p className="text-[13px] font-semibold text-[#303b4a]">
-                {todayLabel || "Today"}
+                {todayLabel || t("Today")}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3 sm:gap-5">
+          <div className="flex items-center gap-2.5 sm:gap-4">
+            <LanguageSwitch />
             <div className="relative">
               <button
                 type="button"
@@ -300,7 +304,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
                 <Bell size={18} aria-hidden="true" />
                 {totalNotificationCount > 0 && (
                   <span
-                    className={`absolute -right-0.5 -top-0.5 flex min-w-[18px] items-center justify-center rounded-full border-2 border-white px-1 text-[9px] font-bold text-white ${
+                    className={`absolute -end-0.5 -top-0.5 flex min-w-[18px] items-center justify-center rounded-full border-2 border-white px-1 text-[9px] font-bold text-white ${
                       pendingRequests.length > 0 ? "bg-[#278968]" : "bg-[#e4845f]"
                     }`}
                   >
@@ -309,7 +313,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
                 )}
               </button>
               {notificationsOpen && (
-                <div className="absolute right-0 top-[calc(100%+12px)] z-30 w-[350px] max-w-[calc(100vw-24px)] rounded-2xl border border-[#e9edf1] bg-white p-3 shadow-[0_16px_40px_rgba(23,36,51,0.16)] sm:w-[390px]">
+                <div className="absolute end-0 top-[calc(100%+12px)] z-30 w-[350px] max-w-[calc(100vw-24px)] rounded-2xl border border-[#e9edf1] bg-white p-3 shadow-[0_16px_40px_rgba(23,36,51,0.16)] sm:w-[390px]">
                   <div className="flex items-center justify-between border-b border-[#edf0f3] px-2 pb-2.5">
                     <p className="text-[12px] font-semibold text-[#303b4a]">
                       Notifications &amp; Requests
@@ -426,7 +430,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
             <div className="relative">
               <button
                 type="button"
-                className="flex items-center gap-2 rounded-full text-left"
+                className="flex items-center gap-2 rounded-full text-start"
                 aria-label={`Account menu for ${accountName}`}
                 aria-expanded={accountMenuOpen}
                 aria-controls="account-menu"
@@ -450,7 +454,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
               {accountMenuOpen && (
                 <div
                   id="account-menu"
-                  className="absolute right-0 top-[calc(100%+12px)] z-30 w-64 rounded-2xl border border-[#e9edf1] bg-white p-2 shadow-[0_16px_40px_rgba(23,36,51,0.14)]"
+                  className="absolute end-0 top-[calc(100%+12px)] z-30 w-64 rounded-2xl border border-[#e9edf1] bg-white p-2 shadow-[0_16px_40px_rgba(23,36,51,0.14)]"
                 >
                   <div className="border-b border-[#edf0f3] px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -473,7 +477,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
                   <Link
                     href="/settings"
                     onClick={() => setAccountMenuOpen(false)}
-                    className="mt-1 flex min-h-9 w-full items-center rounded-xl px-3 text-left text-[12px] font-medium text-[#354153] hover:bg-slate-50"
+                    className="mt-1 flex min-h-9 w-full items-center rounded-xl px-3 text-start text-[12px] font-medium text-[#354153] hover:bg-slate-50"
                   >
                     Gym &amp; Team Settings
                   </Link>
@@ -485,7 +489,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="mt-1 min-h-10 w-full rounded-xl px-3 text-left text-[12px] font-medium text-[#a64141] hover:bg-red-50"
+                    className="mt-1 min-h-10 w-full rounded-xl px-3 text-start text-[12px] font-medium text-[#a64141] hover:bg-red-50"
                   >
                     Log out
                   </button>

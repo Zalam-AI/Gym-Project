@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, Building2, Globe, KeyRound } from "lucide-react";
+import { LanguageSwitch } from "@/lib/i18n";
 import { clearStaffSessionToken, setStaffSessionToken } from "@/lib/staff-client-auth";
 
 type AuthMode = "login" | "register";
@@ -190,6 +191,9 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
     return (
       <main className="grid min-h-screen place-items-center bg-[#f4f6f8] p-6 text-[#182433]">
         <div className="w-full max-w-[440px] rounded-2xl border border-[#e2e8ed] bg-white p-8 text-center shadow-sm">
+          <div className="mb-4 flex justify-end">
+            <LanguageSwitch />
+          </div>
           <div className="mx-auto mb-4 grid size-12 place-items-center rounded-xl bg-amber-50 text-amber-600">
             <AlertTriangle size={22} aria-hidden="true" />
           </div>
@@ -276,7 +280,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
       </section>
 
       <section className="flex min-h-screen flex-col justify-between px-5 py-8 sm:px-10 lg:px-14">
-        <div className="flex items-center justify-between lg:justify-end">
+        <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 lg:hidden">
             <span
               className="grid size-8 place-items-center rounded-[9px] text-sm font-bold text-white"
@@ -288,17 +292,20 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
               {tenantGym ? tenantGym.name : "GymOS"}
             </span>
           </div>
-          <Link
-            href={isRegister ? "/login" : "/register"}
-            className="text-xs font-semibold hover:opacity-85"
-            style={{ color: accentColor }}
-          >
-            {isRegister
-              ? "Sign in instead"
-              : tenantGym
-                ? "Join staff with invite code"
-                : "Launch gym / Join staff"}
-          </Link>
+          <div className="ms-auto flex items-center gap-3">
+            <LanguageSwitch />
+            <Link
+              href={isRegister ? "/login" : "/register"}
+              className="text-xs font-semibold hover:opacity-85"
+              style={{ color: accentColor }}
+            >
+              {isRegister
+                ? "Sign in instead"
+                : tenantGym
+                  ? "Join staff with invite code"
+                  : "Launch gym / Join staff"}
+            </Link>
+          </div>
         </div>
 
         <div className="mx-auto my-10 w-full max-w-[440px]">
@@ -538,7 +545,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
                     ? "Create gym workspace"
                     : "Join gym as staff"
                   : "Sign in"}
-              {!pending && <ArrowRight size={16} aria-hidden="true" />}
+              {!pending && <ArrowRight size={16} className="rtl-flip" aria-hidden="true" />}
             </button>
           </form>
 

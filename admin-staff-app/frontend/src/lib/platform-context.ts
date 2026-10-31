@@ -109,47 +109,57 @@ export async function requirePlatformAdmin(
     };
   }
 
-  await connectToDatabase();
-  const admin = await PlatformAdminModel.findOne({
-    _id: new Types.ObjectId(session.sub),
-    status: "active",
-  }).select("fullName email role permissions status");
+  try {
+    await connectToDatabase();
+    const admin = await PlatformAdminModel.findOne({
+      _id: new Types.ObjectId(session.sub),
+      status: "active",
+    }).select("fullName email role permissions status");
 
-  if (!admin) {
+    if (!admin) {
+      return {
+        response: NextResponse.json(
+          { error: "Platform authentication required." },
+          { status: 401 },
+        ),
+      };
+    }
+
+    const permissions = (admin.permissions ?? []).filter(
+      (p: unknown): p is PlatformPermission =>
+        typeof p === "string" && VALID_PERMISSION_SET.has(p),
+    );
+
+    const role: PlatformRole =
+      typeof admin.role === "string" && VALID_ROLE_SET.has(admin.role)
+        ? (admin.role as PlatformRole)
+        : "platform_admin";
+
+    const ctx: ActivePlatformAdminContext = {
+      adminId: admin._id,
+      fullName: admin.fullName,
+      email: admin.email,
+      role,
+      permissions,
+    };
+
+    if (requiredPermission && !hasPlatformPermission(ctx, requiredPermission)) {
+      return {
+        response: NextResponse.json(
+          { error: `Missing required platform permission: ${requiredPermission}.` },
+          { status: 403 },
+        ),
+      };
+    }
+
+    return { ctx };
+  } catch (error) {
+    console.error("Failed to verify platform admin session against MongoDB:", error);
     return {
       response: NextResponse.json(
-        { error: "Platform authentication required." },
-        { status: 401 },
+        { error: "Database temporarily unavailable. Please try again shortly." },
+        { status: 503 },
       ),
     };
   }
-
-  const permissions = (admin.permissions ?? []).filter(
-    (p: unknown): p is PlatformPermission =>
-      typeof p === "string" && VALID_PERMISSION_SET.has(p),
-  );
-
-  const role: PlatformRole =
-    typeof admin.role === "string" && VALID_ROLE_SET.has(admin.role)
-      ? (admin.role as PlatformRole)
-      : "platform_admin";
-
-  const ctx: ActivePlatformAdminContext = {
-    adminId: admin._id,
-    fullName: admin.fullName,
-    email: admin.email,
-    role,
-    permissions,
-  };
-
-  if (requiredPermission && !hasPlatformPermission(ctx, requiredPermission)) {
-    return {
-      response: NextResponse.json(
-        { error: `Missing required platform permission: ${requiredPermission}.` },
-        { status: 403 },
-      ),
-    };
-  }
-
-  return { ctx };
 }

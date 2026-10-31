@@ -8,9 +8,10 @@ import {
   type FormEvent,
   type MouseEvent,
 } from "react";
-import { Plus, Search, X } from "lucide-react";
+import { Dumbbell, Plus, Search, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
+import { useLanguage } from "@/lib/i18n";
 
 type MemberStatus = "Active" | "Expiring" | "Inactive";
 type StatusFilter = "All" | MemberStatus;
@@ -32,6 +33,18 @@ type PlanOption = {
   name: string;
   price: number;
   durationMonths: number;
+};
+
+type WorkoutRoutineOption = {
+  id: string;
+  title: string;
+  targetGoal: string;
+  assignedMemberIds: string[];
+};
+
+type PendingRoutineAssignment = {
+  memberId: string;
+  workoutPlanId: string;
 };
 
 type NewMemberInput = {
@@ -162,6 +175,7 @@ function AddMemberModal({
   isSubmitting,
   submitError,
 }: AddMemberModalProps) {
+  const { t } = useLanguage();
   const initialPlan = plans[0] ?? null;
 
   const [name, setName] = useState("");
@@ -383,7 +397,7 @@ function AddMemberModal({
               >
                 {[1, 2, 3, 6, 9, 12, 24].map((months) => (
                   <option key={months} value={months}>
-                    {months} {months === 1 ? "month" : "months"}
+                    {t(`${months} ${months === 1 ? "month" : "months"}`)}
                   </option>
                 ))}
               </select>
@@ -490,9 +504,141 @@ function AddMemberModal({
   );
 }
 
+type AssignMemberWorkoutModalProps = {
+  member: Member;
+  routines: WorkoutRoutineOption[];
+  currentRoutineId: string;
+  onClose: () => void;
+  onAssign: (workoutPlanId: string) => Promise<void>;
+  isSubmitting: boolean;
+  submitError: string | null;
+};
+
+function AssignMemberWorkoutModal({
+  member,
+  routines,
+  currentRoutineId,
+  onClose,
+  onAssign,
+  isSubmitting,
+  submitError,
+}: AssignMemberWorkoutModalProps) {
+  const [selectedPlanId, setSelectedPlanId] = useState(
+    currentRoutineId || routines[0]?.id || "",
+  );
+
+  function handleBackdropClick(event: MouseEvent<HTMLDivElement>) {
+    if (event.target === event.currentTarget) onClose();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/45 p-4"
+      onMouseDown={handleBackdropClick}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="assign-routine-title"
+        className="my-auto w-full max-w-[460px] rounded-2xl bg-white p-5 shadow-[0_24px_80px_rgba(15,23,42,0.2)] sm:p-7"
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2
+              id="assign-routine-title"
+              className="text-[18px] font-semibold tracking-[-0.03em] text-[#263344]"
+            >
+              Assign workout routine
+            </h2>
+            <p className="mt-1 text-[12px] text-[#84909d]">
+              Send a workout routine directly to {member.name} without requiring a trainer.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close dialog"
+            onClick={onClose}
+            className="grid size-9 shrink-0 place-items-center rounded-lg text-[#788391] hover:bg-[#f4f6f7]"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        {routines.length === 0 ? (
+          <div className="rounded-xl border border-[#edf0f2] bg-[#fafbfc] p-4 text-[12px] text-[#687585]">
+            No workout plans yet. Create a workout template on the Trainers &amp; Workouts page first.
+          </div>
+        ) : (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!selectedPlanId) return;
+              void onAssign(selectedPlanId);
+            }}
+            className="space-y-4"
+          >
+            {submitError && (
+              <p
+                role="alert"
+                className="rounded-lg bg-[#fff0ef] px-3 py-2 text-[12px] text-[#b34e48]"
+              >
+                {submitError}
+              </p>
+            )}
+            <div>
+              <label
+                htmlFor="member-routine-select"
+                className="mb-1.5 block text-[11px] font-medium text-[#526071]"
+              >
+                Workout routine
+              </label>
+              <select
+                id="member-routine-select"
+                value={selectedPlanId}
+                onChange={(event) => setSelectedPlanId(event.target.value)}
+                className="min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[13px] text-[#344052] outline-none focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+              >
+                {routines.map((routine) => (
+                  <option key={routine.id} value={routine.id}>
+                    {routine.title} · {routine.targetGoal}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="rounded-xl bg-[#f2faf5] px-3.5 py-2.5 text-[11px] leading-5 text-[#278968]">
+              {member.name} will receive a verification prompt in the Mobile App asking whether to accept or decline this routine change.
+            </p>
+            <div className="flex flex-col-reverse gap-2 border-t border-[#edf0f2] pt-5 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSubmitting}
+                className="min-h-10 rounded-lg border border-[#e3e8ec] px-4 text-[12px] font-medium text-[#596575] hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting || !selectedPlanId}
+                className="min-h-10 rounded-lg bg-[#278968] px-4 text-[12px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+              >
+                {isSubmitting ? "Sending…" : "Send to member"}
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export function MembersPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [plans, setPlans] = useState<PlanOption[]>([]);
+  const [routines, setRoutines] = useState<WorkoutRoutineOption[]>([]);
+  const [pendingRoutines, setPendingRoutines] = useState<PendingRoutineAssignment[]>([]);
+  const [assigningRoutineMember, setAssigningRoutineMember] = useState<Member | null>(null);
+  const [routineSuccessBanner, setRoutineSuccessBanner] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -505,15 +651,28 @@ export function MembersPage() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [loadedMembers, membershipsRes] = await Promise.all([
+      const [loadedMembers, membershipsRes, workoutsRes] = await Promise.all([
         fetchMembers(),
         fetch("/api/memberships", { cache: "no-store" }).catch(() => null),
+        fetch("/api/workouts", { cache: "no-store" }).catch(() => null),
       ]);
       setMembers(loadedMembers);
       if (membershipsRes && membershipsRes.ok) {
         const body = (await membershipsRes.json()) as { plans?: PlanOption[] };
         if (Array.isArray(body.plans)) {
           setPlans(body.plans);
+        }
+      }
+      if (workoutsRes && workoutsRes.ok) {
+        const wBody = (await workoutsRes.json()) as {
+          workoutPlans?: WorkoutRoutineOption[];
+          pendingAssignments?: PendingRoutineAssignment[];
+        };
+        if (Array.isArray(wBody.workoutPlans)) {
+          setRoutines(wBody.workoutPlans);
+        }
+        if (Array.isArray(wBody.pendingAssignments)) {
+          setPendingRoutines(wBody.pendingAssignments);
         }
       }
     } catch (error) {
@@ -588,6 +747,38 @@ export function MembersPage() {
     }
   }
 
+  async function assignRoutineToMember(workoutPlanId: string) {
+    if (!assigningRoutineMember || isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      const response = await fetch("/api/workouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "assign",
+          workoutPlanId,
+          memberId: assigningRoutineMember.id,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await getApiError(response));
+      }
+      const targetName = assigningRoutineMember.name;
+      setAssigningRoutineMember(null);
+      setRoutineSuccessBanner(
+        `Workout routine sent to ${targetName} for confirmation in the Mobile App.`,
+      );
+      await loadMembers();
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error ? error.message : "Unable to assign workout routine.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   return (
     <AppShell activePage="Members">
       <main id="main-content" className="mx-auto max-w-[1440px] px-4 py-7 sm:px-7 sm:py-8 lg:px-9">
@@ -614,6 +805,21 @@ export function MembersPage() {
         </div>
 
         <section aria-label="Member list">
+          {routineSuccessBanner && (
+            <div
+              role="status"
+              className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#cde9dc] bg-[#f2faf5] px-4 py-3 text-[12px] font-medium text-[#278968]"
+            >
+              <span>{routineSuccessBanner}</span>
+              <button
+                type="button"
+                onClick={() => setRoutineSuccessBanner("")}
+                className="text-[11px] font-semibold underline underline-offset-2"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {loadError && (
             <div
               role="alert"
@@ -664,14 +870,14 @@ export function MembersPage() {
                 <Search
                   size={16}
                   aria-hidden="true"
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9aa3ae]"
+                  className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-[#9aa3ae]"
                 />
                 <input
                   type="search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search name, phone, or email..."
-                  className="min-h-10 w-full rounded-lg border border-[#e7ebee] bg-white pl-9 pr-3 text-[12px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
+                  className="min-h-10 w-full rounded-lg border border-[#e7ebee] bg-white ps-9 pe-3 text-[12px] text-[#344052] outline-none placeholder:text-[#a0a9b4] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15"
                 />
               </label>
             </div>
@@ -681,7 +887,7 @@ export function MembersPage() {
                 <caption className="sr-only">Gym members and membership details</caption>
                 <thead>
                   <tr className="bg-[#fafbfc]">
-                    {["Name", "Phone", "Membership type", "Status", "Expiry date"].map(
+                    {["Name", "Phone", "Membership type", "Status", "Expiry date", "Workout routine"].map(
                       (heading) => (
                         <th
                           key={heading}
@@ -695,31 +901,67 @@ export function MembersPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#eff1f4]">
-                  {filteredMembers.map((member) => (
-                    <tr key={member.id} className="transition-colors hover:bg-[#fbfcfc]">
-                      <th scope="row" className="px-5 py-4">
-                        <span className="block text-[12px] font-semibold text-[#354153]">
-                          {member.name}
-                        </span>
-                        {member.email && (
-                          <span className="mt-0.5 block text-[10px] font-normal text-[#8993a0]">
-                            {member.email}
+                  {filteredMembers.map((member) => {
+                    const activeRoutine = routines.find((item) =>
+                      item.assignedMemberIds.includes(member.id),
+                    );
+                    const pendingItem = pendingRoutines.find(
+                      (item) => item.memberId === member.id,
+                    );
+                    const pendingRoutine = pendingItem
+                      ? routines.find((item) => item.id === pendingItem.workoutPlanId)
+                      : undefined;
+                    return (
+                      <tr key={member.id} className="transition-colors hover:bg-[#fbfcfc]">
+                        <th scope="row" className="px-5 py-4">
+                          <span className="block text-[12px] font-semibold text-[#354153]">
+                            {member.name}
                           </span>
-                        )}
-                      </th>
-                      <td className="px-5 py-4 text-[12px] text-[#6f7b89]">{member.phone}</td>
-                      <td className="px-5 py-4 text-[12px] text-[#596575]">{member.plan}</td>
-                      <td className="px-5 py-4">
-                        <StatusBadge status={member.status} />
-                      </td>
-                      <td className="px-5 py-4 text-[12px] text-[#6f7b89]">
-                        {formatDate(member.expiryDate)}
-                      </td>
-                    </tr>
-                  ))}
+                          {member.email && (
+                            <span className="mt-0.5 block text-[10px] font-normal text-[#8993a0]">
+                              {member.email}
+                            </span>
+                          )}
+                        </th>
+                        <td className="px-5 py-4 text-[12px] text-[#6f7b89]">{member.phone}</td>
+                        <td className="px-5 py-4 text-[12px] text-[#596575]">{member.plan}</td>
+                        <td className="px-5 py-4">
+                          <StatusBadge status={member.status} />
+                        </td>
+                        <td className="px-5 py-4 text-[12px] text-[#6f7b89]">
+                          {formatDate(member.expiryDate)}
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {activeRoutine && (
+                              <span className="rounded-md bg-[#f2faf5] px-2 py-0.5 text-[10px] font-medium text-[#278968]">
+                                {activeRoutine.title}
+                              </span>
+                            )}
+                            {pendingRoutine && (
+                              <span className="rounded-md bg-[#fff4e8] px-2 py-0.5 text-[10px] font-medium text-[#bd7838]">
+                                Pending: {pendingRoutine.title}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSubmitError(null);
+                                setAssigningRoutineMember(member);
+                              }}
+                              className="inline-flex min-h-7 items-center gap-1.5 rounded-lg border border-[#dce7e1] bg-white px-2.5 text-[10px] font-semibold text-[#278968] hover:bg-[#f1f8f4]"
+                            >
+                              <Dumbbell size={11} aria-hidden="true" />
+                              {activeRoutine || pendingRoutine ? "Change Routine" : "Assign Routine"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {!isLoading && !loadError && filteredMembers.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-5 py-12 text-center">
+                      <td colSpan={6} className="px-5 py-12 text-center">
                         <p className="text-[13px] font-medium text-[#526071]">
                           {members.length === 0 ? "No members yet" : "No members found"}
                         </p>
@@ -734,7 +976,7 @@ export function MembersPage() {
                   {isLoading && (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         role="status"
                         className="px-5 py-12 text-center text-[13px] text-[#788391]"
                       >
@@ -766,6 +1008,28 @@ export function MembersPage() {
             }
           }}
           onAdd={addMember}
+          isSubmitting={isSubmitting}
+          submitError={submitError}
+        />
+      )}
+      {assigningRoutineMember && (
+        <AssignMemberWorkoutModal
+          member={assigningRoutineMember}
+          routines={routines}
+          currentRoutineId={
+            pendingRoutines.find((item) => item.memberId === assigningRoutineMember.id)
+              ?.workoutPlanId ??
+            routines.find((item) => item.assignedMemberIds.includes(assigningRoutineMember.id))
+              ?.id ??
+            ""
+          }
+          onClose={() => {
+            if (!isSubmitting) {
+              setAssigningRoutineMember(null);
+              setSubmitError(null);
+            }
+          }}
+          onAssign={assignRoutineToMember}
           isSubmitting={isSubmitting}
           submitError={submitError}
         />

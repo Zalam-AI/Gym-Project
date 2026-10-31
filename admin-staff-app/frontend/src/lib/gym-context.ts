@@ -45,7 +45,8 @@ export type ActiveStaffContext = {
 type StaffAuthResolution =
   | { status: "ok"; ctx: ActiveStaffContext }
   | { status: "forbidden"; error: string }
-  | { status: "unauthenticated"; error: string };
+  | { status: "unauthenticated"; error: string }
+  | { status: "unavailable"; error: string };
 
 async function evaluateStaffRequest(
   request: Request,
@@ -75,102 +76,110 @@ async function evaluateStaffRequest(
   const userId = new Types.ObjectId(session.sub);
   const gymId = new Types.ObjectId(session.gymId);
 
-  await connectToDatabase();
-  const [user, gym] = await Promise.all([
-    StaffUserModel.findOne({
-      _id: userId,
-      gymId,
-      status: "active",
-    }).select("fullName email role status"),
-    GymModel.findById(gymId).select(
-      "name slug subdomain customDomain branding address phone capacity timezone currency status",
-    ),
-  ]);
+  try {
+    await connectToDatabase();
+    const [user, gym] = await Promise.all([
+      StaffUserModel.findOne({
+        _id: userId,
+        gymId,
+        status: "active",
+      }).select("fullName email role status"),
+      GymModel.findById(gymId).select(
+        "name slug subdomain customDomain branding address phone capacity timezone currency status",
+      ),
+    ]);
 
-  if (!user || !gym) {
-    return { status: "unauthenticated", error: "Authentication required." };
-  }
+    if (!user || !gym) {
+      return { status: "unauthenticated", error: "Authentication required." };
+    }
 
-  if (gym.status !== "active") {
-    return {
-      status: "forbidden",
-      error:
-        gym.status === "pending"
-          ? "This gym workspace is awaiting platform administrator approval."
-          : "This gym workspace is currently suspended.",
-    };
-  }
+    if (gym.status !== "active") {
+      return {
+        status: "forbidden",
+        error:
+          gym.status === "pending"
+            ? "This gym workspace is awaiting platform administrator approval."
+            : "This gym workspace is currently suspended.",
+      };
+    }
 
-  const parsedHost = parseTenantHost(request);
-  if (
-    !doesGymMatchHost(
-      {
-        slug: gym.slug,
-        subdomain: gym.subdomain ?? null,
-        customDomain: gym.customDomain ?? null,
-      },
-      parsedHost,
-    )
-  ) {
-    return {
-      status: "forbidden",
-      error:
-        "Cross-gym access denied: your session belongs to another gym workspace and cannot access this gym URL.",
-    };
-  }
-
-  const authorizedGym = { id: gym._id.toString(), slug: gym.slug };
-  if (hasConflictingGymRef(request, authorizedGym, body)) {
-    return {
-      status: "forbidden",
-      error: "Cross-gym access denied: requested gymId does not match your assigned gym.",
-    };
-  }
-
-  const role: StaffRole = user.role === "owner" ? "owner" : "staff";
-  const subdomain =
-    typeof gym.subdomain === "string" && gym.subdomain.trim()
-      ? gym.subdomain.trim().toLowerCase()
-      : subdomainifyGymName(gym.name);
-  const customDomain =
-    typeof gym.customDomain === "string" && gym.customDomain.trim()
-      ? gym.customDomain.trim().toLowerCase()
-      : "";
-  const rawBranding = gym.branding as
-    | { accentColor?: string; tagline?: string; logoText?: string }
-    | undefined;
-  const accentColor =
-    rawBranding?.accentColor && /^#[0-9a-fA-F]{6}$/.test(rawBranding.accentColor)
-      ? rawBranding.accentColor
-      : "#45b58b";
-
-  return {
-    status: "ok",
-    ctx: {
-      userId: user._id,
-      userName: user.fullName,
-      userEmail: user.email,
-      role,
-      gymId: gym._id,
-      gym: {
-        id: gym._id.toString(),
-        name: gym.name,
-        slug: gym.slug,
-        subdomain,
-        customDomain,
-        branding: {
-          accentColor,
-          tagline: rawBranding?.tagline?.trim() ?? "",
-          logoText: deriveGymInitials(gym.name, rawBranding?.logoText),
+    const parsedHost = parseTenantHost(request);
+    if (
+      !doesGymMatchHost(
+        {
+          slug: gym.slug,
+          subdomain: gym.subdomain ?? null,
+          customDomain: gym.customDomain ?? null,
         },
-        address: gym.address,
-        phone: gym.phone,
-        capacity: typeof gym.capacity === "number" && gym.capacity > 0 ? gym.capacity : 100,
-        timezone: gym.timezone || "Africa/Cairo",
-        currency: gym.currency || "EGP",
+        parsedHost,
+      )
+    ) {
+      return {
+        status: "forbidden",
+        error:
+          "Cross-gym access denied: your session belongs to another gym workspace and cannot access this gym URL.",
+      };
+    }
+
+    const authorizedGym = { id: gym._id.toString(), slug: gym.slug };
+    if (hasConflictingGymRef(request, authorizedGym, body)) {
+      return {
+        status: "forbidden",
+        error: "Cross-gym access denied: requested gymId does not match your assigned gym.",
+      };
+    }
+
+    const role: StaffRole = user.role === "owner" ? "owner" : "staff";
+    const subdomain =
+      typeof gym.subdomain === "string" && gym.subdomain.trim()
+        ? gym.subdomain.trim().toLowerCase()
+        : subdomainifyGymName(gym.name);
+    const customDomain =
+      typeof gym.customDomain === "string" && gym.customDomain.trim()
+        ? gym.customDomain.trim().toLowerCase()
+        : "";
+    const rawBranding = gym.branding as
+      | { accentColor?: string; tagline?: string; logoText?: string }
+      | undefined;
+    const accentColor =
+      rawBranding?.accentColor && /^#[0-9a-fA-F]{6}$/.test(rawBranding.accentColor)
+        ? rawBranding.accentColor
+        : "#45b58b";
+
+    return {
+      status: "ok",
+      ctx: {
+        userId: user._id,
+        userName: user.fullName,
+        userEmail: user.email,
+        role,
+        gymId: gym._id,
+        gym: {
+          id: gym._id.toString(),
+          name: gym.name,
+          slug: gym.slug,
+          subdomain,
+          customDomain,
+          branding: {
+            accentColor,
+            tagline: rawBranding?.tagline?.trim() ?? "",
+            logoText: deriveGymInitials(gym.name, rawBranding?.logoText),
+          },
+          address: gym.address,
+          phone: gym.phone,
+          capacity: typeof gym.capacity === "number" && gym.capacity > 0 ? gym.capacity : 100,
+          timezone: gym.timezone || "Africa/Cairo",
+          currency: gym.currency || "EGP",
+        },
       },
-    },
-  };
+    };
+  } catch (error) {
+    console.error("Failed to verify staff session context against MongoDB:", error);
+    return {
+      status: "unavailable",
+      error: "Database temporarily unavailable. Please try again shortly.",
+    };
+  }
 }
 
 /**
@@ -191,7 +200,14 @@ export async function requireStaffContext(
   return {
     response: NextResponse.json(
       { error: result.error },
-      { status: result.status === "forbidden" ? 403 : 401 },
+      {
+        status:
+          result.status === "unavailable"
+            ? 503
+            : result.status === "forbidden"
+              ? 403
+              : 401,
+      },
     ),
   };
 }
