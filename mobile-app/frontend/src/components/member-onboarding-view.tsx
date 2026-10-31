@@ -22,6 +22,11 @@ import {
   mobileFetch,
   readMobileJson,
 } from "@/lib/mobile-fetch";
+import {
+  ThemeHeaderSwitch,
+  ThemePreferenceControl,
+  ui,
+} from "@/lib/theme";
 
 export type GymPlanOption = {
   id: string;
@@ -211,15 +216,12 @@ export function MemberOnboardingView({
       .join("") || "MB";
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
-      <section
-        aria-label="GymOS member onboarding"
-        className="flex h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[#f7f8fa] shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
-      >
-        <header className="flex min-h-[72px] items-center justify-between border-b border-[#edf0f2] bg-white px-5 pt-[max(env(safe-area-inset-top),8px)]">
+    <main className={ui.pageCanvas}>
+      <section aria-label="GymOS member onboarding" className={ui.appFrame}>
+        <header className={ui.appHeader}>
           <div className="flex items-center gap-3">
             <span
-              className="grid size-9 place-items-center rounded-xl bg-[#45b58b] text-[14px] font-bold text-white"
+              className="grid size-9 place-items-center rounded-xl bg-accent text-[14px] font-bold text-on-accent"
               aria-hidden="true"
             >
               G
@@ -227,16 +229,17 @@ export function MemberOnboardingView({
             <div>
               <p
                 data-no-translate="true"
-                className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+                className="text-[13px] font-semibold tracking-[-0.03em] text-ink"
               >
-                Gym<span className="text-[#2d9d78]">OS</span>
+                Gym<span className="text-accent-text">OS</span>
               </p>
-              <p className="text-[9px] uppercase tracking-wide text-[#8993a0]">
+              <p className="text-[9px] uppercase tracking-wide text-ink-muted">
                 MEMBER APP
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <ThemeHeaderSwitch />
             <LanguageSwitch />
             <button
               type="button"
@@ -244,7 +247,7 @@ export function MemberOnboardingView({
               disabled={isLoggingOut}
               aria-label="Sign out"
               title="Sign out"
-              className="grid size-9 place-items-center rounded-lg text-[#74808e] hover:bg-[#f3f5f6] hover:text-[#a64141]"
+              className={`${ui.btnGhost} size-9 hover:text-danger-text`}
             >
               <LogOut size={15} aria-hidden="true" />
             </button>
@@ -252,19 +255,19 @@ export function MemberOnboardingView({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-5">
-          {/* Member identity strip — clean, no gym branch, no renewal warning */}
-          <div className="mb-5 flex items-center gap-3 rounded-2xl border border-[#e9edf1] bg-white p-3.5">
+          {/* Member identity strip */}
+          <div className={`${ui.card} mb-5 flex items-center gap-3 p-3.5`}>
             <span
-              className="grid size-11 shrink-0 place-items-center rounded-full bg-[#e8f4ee] text-[12px] font-semibold text-[#2e8868]"
+              className="grid size-11 shrink-0 place-items-center rounded-full border border-accent-border bg-accent-soft text-[12px] font-semibold text-accent-text"
               aria-hidden="true"
             >
               {initials}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-semibold text-[#243242]">
+              <p className="truncate text-[13px] font-semibold text-ink">
                 {memberName}
               </p>
-              <p className="mt-0.5 truncate text-[10px] text-[#87909d]">
+              <p className="mt-0.5 truncate text-[10px] text-ink-secondary">
                 {memberPhone}
                 {memberEmail ? ` · ${memberEmail}` : ""}
               </p>
@@ -274,7 +277,7 @@ export function MemberOnboardingView({
           {error && (
             <p
               role="alert"
-              className="mb-4 rounded-xl border border-[#f1d2cd] bg-[#fff6f4] px-3.5 py-2.5 text-[11px] text-[#a9433b]"
+              className="mb-4 rounded-xl border border-danger-border bg-danger-soft px-3.5 py-2.5 text-[11px] text-danger-text"
             >
               {error}
             </p>
@@ -283,47 +286,58 @@ export function MemberOnboardingView({
           {/* STATE 1: PENDING STAFF ACCEPTANCE */}
           {pendingRequest && !connectedGym ? (
             <div className="space-y-4">
-              <section className="overflow-hidden rounded-[22px] bg-[#172433] p-5 text-white shadow-[0_12px_30px_rgba(23,36,51,0.17)]">
-                <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-[9px] font-semibold uppercase tracking-wider text-[#8bdbb7]">
-                  <span className="size-1.5 animate-pulse rounded-full bg-[#63d4a3]" />
+              <section className={`${ui.cardElevated} p-5`}>
+                <div className={ui.badgeAccent}>
+                  <span className="size-1.5 animate-pulse rounded-full bg-accent" />
                   Sent to gym reception
                 </div>
-                <h1 className="mt-3 text-[19px] font-semibold tracking-[-0.03em]">
+                <h1 className="mt-3 text-[19px] font-semibold tracking-[-0.03em] text-ink">
                   Waiting for staff approval
                 </h1>
-                <p className="mt-1.5 text-[11px] leading-4 text-slate-300">
-                  Complete your <span className="font-semibold text-white">{pendingRequest.paymentMethod}</span> payment with reception at{" "}
-                  <span className="font-semibold text-white">{pendingRequest.gymName}</span>. Once staff clicks{" "}
-                  <span className="font-semibold text-[#8bdbb7]">Accept</span>, your gym pass unlocks automatically.
+                <p className="mt-1.5 text-[11px] leading-4 text-ink-secondary">
+                  Complete your{" "}
+                  <span className="font-semibold text-ink">
+                    {pendingRequest.paymentMethod}
+                  </span>{" "}
+                  payment with reception at{" "}
+                  <span className="font-semibold text-ink">
+                    {pendingRequest.gymName}
+                  </span>
+                  . Once staff clicks{" "}
+                  <span className="font-semibold text-accent-text">Accept</span>, your gym pass unlocks automatically.
                 </p>
 
-                <div className="mt-4 space-y-2 rounded-xl bg-white/[0.07] p-3.5 text-[11px]">
+                <div className={`${ui.cardSubtle} mt-4 space-y-2 p-3.5 text-[11px]`}>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Gym</span>
-                    <span className="font-semibold text-white">{pendingRequest.gymName}</span>
+                    <span className="text-ink-secondary">Gym</span>
+                    <span className="font-semibold text-ink">
+                      {pendingRequest.gymName}
+                    </span>
                   </div>
-                  <div className="flex items-center justify-between border-t border-white/10 pt-2">
-                    <span className="text-slate-400">Selected plan</span>
-                    <span className="font-semibold text-white">{pendingRequest.planName}</span>
+                  <div className="flex items-center justify-between border-t border-divider pt-2">
+                    <span className="text-ink-secondary">Selected plan</span>
+                    <span className="font-semibold text-ink">
+                      {pendingRequest.planName}
+                    </span>
                   </div>
-                  <div className="flex items-center justify-between border-t border-white/10 pt-2">
-                    <span className="text-slate-400">Amount to pay</span>
-                    <span className="font-bold text-[#8bdbb7]">
+                  <div className="flex items-center justify-between border-t border-divider pt-2">
+                    <span className="text-ink-secondary">Amount to pay</span>
+                    <span className="font-bold text-accent-text">
                       {formatEgp(pendingRequest.price)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between border-t border-white/10 pt-2">
-                    <span className="text-slate-400">Payment method</span>
-                    <span className="rounded-md bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white">
+                  <div className="flex items-center justify-between border-t border-divider pt-2">
+                    <span className="text-ink-secondary">Payment method</span>
+                    <span className={ui.badgeNeutral}>
                       {pendingRequest.paymentMethod}
                     </span>
                   </div>
                 </div>
               </section>
 
-              <div className="flex items-center gap-2.5 rounded-2xl border border-[#dceee4] bg-[#f2faf5] p-3.5">
-                <Clock3 size={17} className="shrink-0 text-[#278968]" aria-hidden="true" />
-                <p className="text-[10px] leading-4 text-[#355649]">
+              <div className="flex items-center gap-2.5 rounded-2xl border border-accent-border bg-accent-soft p-3.5">
+                <Clock3 size={17} className="shrink-0 text-accent-text" aria-hidden="true" />
+                <p className="text-[10px] leading-4 text-ink">
                   Checking live… This screen updates automatically the moment gym staff accepts your payment.
                 </p>
               </div>
@@ -333,7 +347,7 @@ export function MemberOnboardingView({
                   type="button"
                   disabled={isRefreshing}
                   onClick={() => void manualCheckStatus()}
-                  className="inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#278968] px-3 text-[11px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+                  className={`${ui.btnPrimary} min-h-11 flex-1 px-3 text-[11px]`}
                 >
                   <RefreshCw
                     size={14}
@@ -346,7 +360,7 @@ export function MemberOnboardingView({
                   type="button"
                   disabled={isCancelling}
                   onClick={() => void cancelPendingAndChange()}
-                  className="inline-flex min-h-11 items-center justify-center rounded-xl border border-[#e3e8ec] bg-white px-3.5 text-[11px] font-medium text-[#687585] hover:bg-slate-50 disabled:opacity-60"
+                  className={`${ui.btnSecondary} min-h-11 px-3.5 text-[11px]`}
                 >
                   {isCancelling ? "Cancelling…" : "Change plan"}
                 </button>
@@ -355,20 +369,20 @@ export function MemberOnboardingView({
           ) : connectedGym ? (
             /* STATE 2: CONNECTED TO GYM VIA QR -> CHOOSE PLAN & PAYMENT METHOD */
             <div className="space-y-4">
-              <section className="rounded-2xl border border-[#cfe9dc] bg-[#f1faf5] p-4">
+              <section className="rounded-2xl border border-accent-border bg-accent-soft p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2.5">
-                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#278968] text-white">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent text-on-accent">
                       <Building2 size={17} aria-hidden="true" />
                     </span>
                     <div>
-                      <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#278968]">
+                      <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-accent-text">
                         Connected via QR
                       </p>
-                      <h1 className="mt-0.5 text-[15px] font-semibold text-[#1f2b39]">
+                      <h1 className="mt-0.5 text-[15px] font-semibold text-ink">
                         {connectedGym.name}
                       </h1>
-                      <p className="mt-0.5 text-[10px] text-[#687585]">
+                      <p className="mt-0.5 text-[10px] text-ink-secondary">
                         {connectedGym.address}
                       </p>
                     </div>
@@ -376,7 +390,7 @@ export function MemberOnboardingView({
                   <button
                     type="button"
                     onClick={onOpenJoinScanner}
-                    className="shrink-0 rounded-lg border border-[#cfe9dc] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#278968] hover:bg-[#eaf6f0]"
+                    className={`${ui.btnSecondary} shrink-0 px-2.5 py-1.5 text-[10px]`}
                   >
                     Rescan
                   </button>
@@ -384,11 +398,11 @@ export function MemberOnboardingView({
               </section>
 
               <div>
-                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#687585]">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink-secondary">
                   1. Choose your membership plan
                 </p>
                 {connectedGym.plans.length === 0 ? (
-                  <div className="rounded-2xl border border-[#e9edf1] bg-white p-5 text-center text-[11px] text-[#87909d]">
+                  <div className={`${ui.card} p-5 text-center text-[11px] text-ink-secondary`}>
                     This gym has not published any active membership plans yet.
                   </div>
                 ) : (
@@ -400,38 +414,38 @@ export function MemberOnboardingView({
                           key={plan.id}
                           type="button"
                           onClick={() => setSelectedPlanId(plan.id)}
-                          className={`w-full rounded-2xl border p-4 text-left transition-all ${
+                          className={`w-full rounded-2xl border p-4 text-left transition-colors ${
                             selected
-                              ? "border-[#278968] bg-white ring-2 ring-[#278968]/15"
-                              : "border-[#e6eaee] bg-white hover:border-[#cad4dc]"
+                              ? "border-accent bg-elevated"
+                              : "border-line bg-surface hover:border-line-strong"
                           }`}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div>
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="text-[13px] font-semibold text-[#243242]">
+                                <span className="text-[13px] font-semibold text-ink">
                                   {plan.name}
                                 </span>
                                 {plan.featured && (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-[#eaf6f0] px-2 py-0.5 text-[8px] font-bold uppercase text-[#278968]">
+                                  <span className={ui.badgeAccent}>
                                     <Sparkles size={9} aria-hidden="true" />
                                     Best value
                                   </span>
                                 )}
                               </div>
-                              <p className="mt-0.5 text-[10px] text-[#87909d]">
+                              <p className="mt-0.5 text-[10px] text-ink-secondary">
                                 Duration: {plan.durationLabel}
                               </p>
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-[15px] font-bold text-[#1f2b39]">
+                              <span className="text-[15px] font-bold text-ink">
                                 {formatEgp(plan.price)}
                               </span>
                               <span
                                 className={`grid size-5 place-items-center rounded-full border ${
                                   selected
-                                    ? "border-[#278968] bg-[#278968] text-white"
-                                    : "border-[#cfd7df] bg-white"
+                                    ? "border-accent bg-accent text-on-accent"
+                                    : "border-line-strong bg-subtle"
                                 }`}
                               >
                                 {selected && <Check size={12} aria-hidden="true" />}
@@ -440,15 +454,15 @@ export function MemberOnboardingView({
                           </div>
 
                           {plan.benefits.length > 0 && (
-                            <ul className="mt-2.5 space-y-1 border-t border-[#f0f2f5] pt-2.5">
+                            <ul className="mt-2.5 space-y-1 border-t border-divider pt-2.5">
                               {plan.benefits.slice(0, 3).map((benefit) => (
                                 <li
                                   key={benefit}
-                                  className="flex items-center gap-1.5 text-[10px] text-[#687585]"
+                                  className="flex items-center gap-1.5 text-[10px] text-ink-secondary"
                                 >
                                   <CheckCircle2
                                     size={11}
-                                    className="shrink-0 text-[#36a47b]"
+                                    className="shrink-0 text-accent-text"
                                     aria-hidden="true"
                                   />
                                   <span className="truncate">{benefit}</span>
@@ -465,7 +479,7 @@ export function MemberOnboardingView({
 
               {chosenPlan && (
                 <div>
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-[#687585]">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-ink-secondary">
                     2. Choose how you will pay
                   </p>
                   <div className="grid grid-cols-3 gap-2">
@@ -483,12 +497,12 @@ export function MemberOnboardingView({
                           onClick={() => {
                             if (!isDisabled) setPaymentMethod(method);
                           }}
-                          className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition-all ${
+                          className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition-colors ${
                             isDisabled
-                              ? "cursor-not-allowed border-[#e6eaee] bg-[#f3f5f7] text-[#a6b0bc] opacity-65"
+                              ? "cursor-not-allowed border-line bg-subtle text-ink-muted opacity-55"
                               : active
-                                ? "border-[#278968] bg-[#eaf6f0] text-[#237e5f] ring-2 ring-[#278968]/15"
-                                : "border-[#e6eaee] bg-white text-[#526071] hover:border-[#cad4dc]"
+                                ? "border-accent bg-accent-soft text-accent-text"
+                                : "border-line bg-surface text-ink-secondary hover:border-line-strong"
                           }`}
                         >
                           <Icon size={18} aria-hidden="true" />
@@ -497,9 +511,9 @@ export function MemberOnboardingView({
                       );
                     })}
                   </div>
-                  <p className="mt-2 text-[10px] text-[#788391]">
+                  <p className="mt-2 text-[10px] text-ink-secondary">
                     {PAYMENT_METHOD_META[paymentMethod].hint} · Gym staff will get an instant notification to accept your{" "}
-                    <span className="font-semibold text-[#243242]">
+                    <span className="font-semibold text-ink">
                       {formatEgp(chosenPlan.price)}
                     </span>{" "}
                     payment.
@@ -509,7 +523,7 @@ export function MemberOnboardingView({
                     type="button"
                     disabled={isSubmitting}
                     onClick={() => void submitSubscriptionRequest()}
-                    className="mt-4 inline-flex min-h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#278968] px-4 text-[12px] font-semibold text-white shadow-[0_8px_20px_rgba(39,137,104,0.22)] hover:bg-[#207858] disabled:cursor-wait disabled:opacity-60"
+                    className={`${ui.btnPrimary} mt-4 min-h-13 w-full px-4 text-[12px]`}
                   >
                     {isSubmitting && (
                       <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
@@ -522,26 +536,26 @@ export function MemberOnboardingView({
               )}
             </div>
           ) : (
-            /* STATE 0: BRAND-NEW ACCOUNT -> ONLY OPTION IS SCAN GYM QR CODE! */
-            <div className="flex flex-col items-center pt-4 text-center">
-              <div className="w-full overflow-hidden rounded-[24px] bg-[#172433] px-6 py-8 text-white shadow-[0_14px_34px_rgba(23,36,51,0.18)]">
-                <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-[#278968]/25 text-[#8bdbb7] ring-1 ring-[#8bdbb7]/30">
+            /* STATE 0: BRAND-NEW ACCOUNT -> SCAN GYM QR CODE */
+            <div className="flex flex-col items-center pt-2 text-center">
+              <div className={`${ui.cardElevated} w-full px-6 py-8`}>
+                <span className="mx-auto grid size-16 place-items-center rounded-2xl border border-accent-border bg-accent-soft text-accent-text">
                   <QrCode size={32} aria-hidden="true" />
                 </span>
-                <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#82cdb0]">
+                <p className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em] text-accent-text">
                   Account ready
                 </p>
-                <h1 className="mt-1.5 text-[21px] font-semibold tracking-[-0.035em]">
+                <h1 className="mt-1.5 text-[21px] font-semibold tracking-[-0.035em] text-ink">
                   Connect to your gym
                 </h1>
-                <p className="mx-auto mt-2 max-w-[270px] text-[11px] leading-5 text-slate-300">
+                <p className="mx-auto mt-2 max-w-[270px] text-[11px] leading-5 text-ink-secondary">
                   You&apos;re not enrolled in a gym plan yet. Scan the Reception QR code at the gym to view plans, choose how to pay, and activate your pass.
                 </p>
 
                 <button
                   type="button"
                   onClick={onOpenJoinScanner}
-                  className="mt-6 flex min-h-13 w-full items-center justify-center gap-2.5 rounded-2xl bg-[#278968] px-4 text-[13px] font-semibold text-white shadow-[0_8px_20px_rgba(39,137,104,0.3)] transition-colors hover:bg-[#207858]"
+                  className={`${ui.btnPrimary} mt-6 flex min-h-13 w-full px-4 text-[13px]`}
                 >
                   <ScanLine size={19} aria-hidden="true" />
                   Scan Gym QR Code
@@ -549,6 +563,8 @@ export function MemberOnboardingView({
               </div>
             </div>
           )}
+
+          <ThemePreferenceControl className="mt-5" />
         </div>
       </section>
     </main>

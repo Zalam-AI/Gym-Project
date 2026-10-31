@@ -25,6 +25,11 @@ import {
   mobileFetch,
   readMobileJson,
 } from "@/lib/mobile-fetch";
+import {
+  ThemeHeaderSwitch,
+  ThemePreferenceControl,
+  ui,
+} from "@/lib/theme";
 
 export type TrainerTab = "Pass" | "Clients" | "Schedule" | "Profile";
 
@@ -280,15 +285,12 @@ export function TrainerPortalView({
   ];
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
-      <section
-        aria-label="GymOS trainer app"
-        className="flex h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[#f7f8fa] shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
-      >
-        <header className="flex min-h-[72px] items-center justify-between border-b border-[#edf0f2] bg-white px-5 pt-[max(env(safe-area-inset-top),8px)]">
+    <main className={ui.pageCanvas}>
+      <section aria-label="GymOS trainer app" className={ui.appFrame}>
+        <header className={ui.appHeader}>
           <div className="flex items-center gap-3">
             <span
-              className="grid size-9 place-items-center rounded-xl bg-[#345995] text-[14px] font-bold text-white"
+              className="grid size-9 place-items-center rounded-xl bg-accent text-[14px] font-bold text-on-accent"
               aria-hidden="true"
             >
               G
@@ -297,20 +299,19 @@ export function TrainerPortalView({
               <div className="flex items-center gap-1.5">
                 <p
                   data-no-translate="true"
-                  className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+                  className="text-[13px] font-semibold tracking-[-0.03em] text-ink"
                 >
-                  Gym<span className="text-[#2d9d78]">OS</span>
+                  Gym<span className="text-accent-text">OS</span>
                 </p>
-                <span className="rounded-full bg-[#eef2ff] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-[#3f64a8]">
-                  Coach
-                </span>
+                <span className={ui.badgeNeutral}>Coach</span>
               </div>
-              <p className="max-w-[130px] truncate text-[9px] uppercase tracking-wide text-[#8993a0]">
+              <p className="max-w-[130px] truncate text-[9px] uppercase tracking-wide text-ink-muted">
                 {trainer.gymName}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <ThemeHeaderSwitch />
             <LanguageSwitch />
             <button
               type="button"
@@ -318,7 +319,7 @@ export function TrainerPortalView({
               disabled={isLoggingOut}
               aria-label="Sign out"
               title="Sign out"
-              className="grid size-9 place-items-center rounded-lg text-[#74808e] hover:bg-[#f3f5f6] hover:text-[#a64141]"
+              className={`${ui.btnGhost} size-9 hover:text-danger-text`}
             >
               <LogOut size={15} aria-hidden="true" />
             </button>
@@ -328,16 +329,14 @@ export function TrainerPortalView({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-5">
           <div className="mb-5 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[11px] text-[#8993a0]">Coach workspace</p>
-              <h1 className="mt-0.5 truncate text-[21px] font-semibold tracking-[-0.045em] text-[#243242]">
+              <p className="text-[11px] text-ink-secondary">Coach workspace</p>
+              <h1 className="mt-0.5 truncate text-[21px] font-semibold tracking-[-0.045em] text-ink">
                 {trainer.name}
               </h1>
             </div>
             <span
-              className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold ${
-                trainer.checkedInNow
-                  ? "bg-[#eaf6f0] text-[#278968]"
-                  : "bg-[#eef2ff] text-[#3f64a8]"
+              className={`shrink-0 ${
+                trainer.checkedInNow ? ui.badgeAccent : ui.badgeNeutral
               }`}
             >
               {trainer.checkedInNow ? "On Floor" : "Active Coach"}
@@ -347,7 +346,7 @@ export function TrainerPortalView({
           {(dataError || (actionError && !isNewSessionOpen)) && (
             <p
               role="alert"
-              className="mb-4 rounded-lg bg-[#fff1ef] px-3 py-2 text-[10px] text-[#a9433b]"
+              className="mb-4 rounded-xl border border-danger-border bg-danger-soft px-3 py-2 text-[10px] text-danger-text"
             >
               {dataError || actionError}
             </p>
@@ -357,23 +356,25 @@ export function TrainerPortalView({
             <div className="space-y-4">
               <section
                 aria-labelledby="coach-pass-heading"
-                className="overflow-hidden rounded-[22px] bg-gradient-to-br from-[#172433] via-[#1d3147] to-[#1a3c34] text-white shadow-[0_12px_30px_rgba(23,36,51,0.2)]"
+                className={`${ui.cardElevated} overflow-hidden`}
               >
                 <div className="flex items-center justify-between px-5 pb-3 pt-5">
                   <div>
-                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#82cdb0]">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-accent-text">
                       Digital trainer pass
                     </p>
                     <h2
                       id="coach-pass-heading"
-                      className="mt-1 text-[19px] font-semibold tracking-[-0.035em]"
+                      className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
                     >
                       {trainer.name}
                     </h2>
-                    <p className="mt-0.5 text-[10px] text-slate-300">{trainer.specialty}</p>
+                    <p className="mt-0.5 text-[10px] text-ink-secondary">
+                      {trainer.specialty}
+                    </p>
                   </div>
                   <span
-                    className="grid size-10 place-items-center rounded-full bg-white/10 text-[11px] font-semibold text-white"
+                    className="grid size-10 place-items-center rounded-full border border-accent-border bg-accent-soft text-[11px] font-semibold text-accent-text"
                     aria-hidden="true"
                   >
                     {trainer.name
@@ -384,23 +385,23 @@ export function TrainerPortalView({
                       .toUpperCase()}
                   </span>
                 </div>
-                <div className="mx-5 grid grid-cols-2 gap-3 rounded-xl bg-white/[0.08] p-3.5">
+                <div className={`${ui.cardSubtle} mx-5 grid grid-cols-2 gap-3 p-3.5`}>
                   <div>
-                    <p className="text-[9px] text-slate-400">ASSIGNED CLIENTS</p>
-                    <p className="mt-1 text-[12px] font-semibold">
+                    <p className="text-[9px] text-ink-muted">ASSIGNED CLIENTS</p>
+                    <p className="mt-1 text-[12px] font-semibold text-ink">
                       {trainees.length} {trainees.length === 1 ? "member" : "members"}
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-[9px] text-slate-400">FLOOR STATUS</p>
-                    <p className="mt-1 text-[12px] font-semibold text-[#82cdb0]">
+                    <p className="text-[9px] text-ink-muted">FLOOR STATUS</p>
+                    <p className="mt-1 text-[12px] font-semibold text-accent-text">
                       {trainer.checkedInNow ? "Checked in" : "Ready to scan"}
                     </p>
                   </div>
                 </div>
-                <div className="mt-3 flex items-center justify-between border-t border-white/10 px-5 py-3">
-                  <span className="text-[9px] text-slate-400">COACH ID</span>
-                  <span className="font-mono text-[10px] tracking-wide text-slate-200">
+                <div className="mt-3 flex items-center justify-between border-t border-divider px-5 py-3">
+                  <span className="text-[9px] text-ink-muted">COACH ID</span>
+                  <span className="font-mono text-[10px] tracking-wide text-ink-secondary">
                     {trainer.id.slice(-8).toUpperCase()}
                   </span>
                 </div>
@@ -409,23 +410,23 @@ export function TrainerPortalView({
               <button
                 type="button"
                 onClick={onOpenScanner}
-                className="flex min-h-14 w-full items-center justify-center gap-2.5 rounded-2xl bg-[#278968] px-4 text-[13px] font-semibold text-white shadow-[0_8px_20px_rgba(39,137,104,0.2)] transition-colors hover:bg-[#207858]"
+                className={`${ui.btnPrimary} flex min-h-14 w-full rounded-2xl px-4 text-[13px]`}
               >
                 <ScanLine size={19} aria-hidden="true" />
                 Scan Gym QR Code
               </button>
 
-              <section className="rounded-2xl border border-[#e9edf1] bg-white p-4">
+              <section className={`${ui.card} p-4`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <span className="grid size-8 place-items-center rounded-xl bg-[#eaf6f0] text-[#278968]">
+                    <span className="grid size-8 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
                       <UsersRound size={15} aria-hidden="true" />
                     </span>
                     <div>
-                      <p className="text-[11px] font-semibold text-[#354153]">
+                      <p className="text-[11px] font-semibold text-ink">
                         Clients in the gym right now
                       </p>
-                      <p className="text-[10px] text-[#87909d]">
+                      <p className="text-[10px] text-ink-secondary">
                         {traineesOnFloor.length > 0
                           ? `${traineesOnFloor.length} of your trainees checked in on floor`
                           : "None of your trainees are checked in right now"}
@@ -435,19 +436,16 @@ export function TrainerPortalView({
                   <button
                     type="button"
                     onClick={() => setActiveTab("Clients")}
-                    className="text-[10px] font-semibold text-[#278968]"
+                    className="text-[10px] font-semibold text-accent-text"
                   >
                     View all
                   </button>
                 </div>
                 {traineesOnFloor.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[#edf0f2] pt-3">
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-divider pt-3">
                     {traineesOnFloor.map((client) => (
-                      <span
-                        key={client.id}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-[#eaf6f0] px-2.5 py-1 text-[10px] font-semibold text-[#278968]"
-                      >
-                        <span className="size-1.5 rounded-full bg-[#278968]" />
+                      <span key={client.id} className={ui.badgeAccent}>
+                        <span className="size-1.5 rounded-full bg-accent" />
                         {client.name}
                       </span>
                     ))}
@@ -458,22 +456,24 @@ export function TrainerPortalView({
               <button
                 type="button"
                 onClick={() => setActiveTab("Schedule")}
-                className="flex w-full items-center gap-3 rounded-2xl border border-[#e9edf1] bg-white p-4 text-left hover:bg-[#fbfcfc]"
+                className={`${ui.cardInteractive} flex w-full items-center gap-3 p-4 text-left`}
               >
-                <span className="grid size-9 place-items-center rounded-xl bg-[#eef2ff] text-[#4d62b8]">
+                <span className="grid size-9 place-items-center rounded-xl border border-line bg-subtle text-ink-secondary">
                   <CalendarDays size={17} aria-hidden="true" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[11px] font-semibold text-[#354153]">
+                  <span className="block text-[11px] font-semibold text-ink">
                     Next coaching session
                   </span>
-                  <span className="mt-1 block truncate text-[10px] text-[#87909d]">
+                  <span className="mt-1 block truncate text-[10px] text-ink-secondary">
                     {nextSession
                       ? `${nextSession.memberName} · ${formatShortDateTime(nextSession.startsAt)}`
                       : "No upcoming sessions — tap to schedule"}
                   </span>
                 </span>
-                <span className="text-[10px] font-semibold text-[#278968]">Schedule</span>
+                <span className="text-[10px] font-semibold text-accent-text">
+                  Schedule
+                </span>
               </button>
             </div>
           )}
@@ -482,12 +482,12 @@ export function TrainerPortalView({
             <section aria-labelledby="clients-heading">
               <div className="mb-3.5 flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#83908d]">
+                  <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
                     Your roster
                   </p>
                   <h2
                     id="clients-heading"
-                    className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-[#243242]"
+                    className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
                   >
                     People training with you
                   </h2>
@@ -496,7 +496,7 @@ export function TrainerPortalView({
                   <button
                     type="button"
                     onClick={() => openNewSessionFor()}
-                    className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-[#278968] px-2.5 text-[10px] font-semibold text-white hover:bg-[#207858]"
+                    className={`${ui.btnPrimary} min-h-8 px-2.5 text-[10px]`}
                   >
                     <CalendarPlus size={12} aria-hidden="true" />
                     Book
@@ -517,10 +517,10 @@ export function TrainerPortalView({
                     key={pill.id}
                     type="button"
                     onClick={() => setClientFilter(pill.id)}
-                    className={`rounded-full px-3 py-1.5 text-[10px] font-semibold transition-colors ${
+                    className={`rounded-full border px-3 py-1.5 text-[10px] font-semibold transition-colors ${
                       clientFilter === pill.id
-                        ? "bg-[#243242] text-white"
-                        : "border border-[#e3e8ec] bg-white text-[#687585]"
+                        ? "border-accent-border bg-accent-soft text-accent-text"
+                        : "border-line bg-surface text-ink-secondary hover:text-ink"
                     }`}
                   >
                     {pill.label}
@@ -532,10 +532,7 @@ export function TrainerPortalView({
                 {filteredTrainees.map((client) => {
                   const isExpanded = expandedTraineeId === client.id;
                   return (
-                    <li
-                      key={client.id}
-                      className="overflow-hidden rounded-2xl border border-[#e9edf1] bg-white"
-                    >
+                    <li key={client.id} className={`${ui.card} overflow-hidden`}>
                       <button
                         type="button"
                         onClick={() =>
@@ -544,10 +541,10 @@ export function TrainerPortalView({
                         className="flex w-full items-start gap-3 p-3.5 text-left"
                       >
                         <span
-                          className={`grid size-10 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${
+                          className={`grid size-10 shrink-0 place-items-center rounded-full border text-[11px] font-semibold ${
                             client.onFloorNow
-                              ? "bg-[#dcefe4] text-[#278968]"
-                              : "bg-[#eef2ff] text-[#4d62b8]"
+                              ? "border-accent-border bg-accent-soft text-accent-text"
+                              : "border-line bg-subtle text-ink-secondary"
                           }`}
                         >
                           {client.name
@@ -559,46 +556,46 @@ export function TrainerPortalView({
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <p className="truncate text-[12px] font-semibold text-[#354153]">
+                            <p className="truncate text-[12px] font-semibold text-ink">
                               {client.name}
                             </p>
                             {client.onFloorNow && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-[#eaf6f0] px-2 py-0.5 text-[8px] font-bold text-[#278968]">
-                                <span className="size-1.5 rounded-full bg-[#278968]" />
+                              <span className={ui.badgeAccent}>
+                                <span className="size-1.5 rounded-full bg-accent" />
                                 In gym now
                               </span>
                             )}
                             <span
-                              className={`rounded-full px-2 py-0.5 text-[8px] font-semibold ${
+                              className={
                                 client.membershipStatus === "Active"
-                                  ? "bg-[#f2f4f6] text-[#526071]"
+                                  ? ui.badgeNeutral
                                   : client.membershipStatus === "Unpaid"
-                                    ? "bg-[#fff4e8] text-[#bd7838]"
-                                    : "bg-[#fff0ee] text-[#c4544c]"
-                              }`}
+                                    ? ui.badgeWarning
+                                    : ui.badgeDanger
+                              }
                             >
                               {client.membershipStatus}
                             </span>
                           </div>
-                          <p className="mt-1 truncate text-[10px] text-[#7b8794]">
+                          <p className="mt-1 truncate text-[10px] text-ink-secondary">
                             {client.workoutPlan
                               ? `${client.workoutPlan.title} (${client.workoutPlan.exercises.length} ex)`
                               : "No workout plan assigned yet"}
                           </p>
                           {client.nextSession && (
-                            <p className="mt-1 text-[9px] font-medium text-[#3f64a8]">
+                            <p className="mt-1 text-[9px] font-medium text-accent-text">
                               Next: {formatShortDateTime(client.nextSession.startsAt)}
                             </p>
                           )}
                         </div>
-                        <span className="mt-1 text-[#9aa3ae]">
+                        <span className="mt-1 text-ink-muted">
                           {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                         </span>
                       </button>
 
                       {isExpanded && (
-                        <div className="space-y-3 border-t border-[#edf0f2] bg-[#fbfcfc] p-3.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-[#687585]">
+                        <div className="space-y-3 border-t border-divider bg-subtle p-3.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-ink-secondary">
                             <span className="inline-flex items-center gap-1">
                               <Phone size={11} aria-hidden="true" />
                               {client.phone}
@@ -609,7 +606,7 @@ export function TrainerPortalView({
                           <div>
                             <label
                               htmlFor={`plan-select-${client.id}`}
-                              className="mb-1 block text-[9px] font-semibold uppercase tracking-wide text-[#83908d]"
+                              className="mb-1 block text-[9px] font-semibold uppercase tracking-wide text-ink-muted"
                             >
                               Assigned workout routine
                             </label>
@@ -625,7 +622,7 @@ export function TrainerPortalView({
                                   workoutPlanId: event.target.value,
                                 });
                               }}
-                              className="min-h-9 w-full rounded-lg border border-[#e3e8ec] bg-white px-2.5 text-[11px] text-[#344052] outline-none focus:border-[#55b994]"
+                              className={`${ui.select} min-h-9 px-2.5 text-[11px]`}
                             >
                               <option value="" disabled>
                                 Select a workout template…
@@ -639,16 +636,16 @@ export function TrainerPortalView({
                           </div>
 
                           {client.workoutPlan && (
-                            <ul className="space-y-1.5 rounded-xl border border-[#edf0f2] bg-white p-2.5">
+                            <ul className={`${ui.card} space-y-1.5 p-2.5`}>
                               {client.workoutPlan.exercises.map((ex, idx) => (
                                 <li
                                   key={ex.id}
                                   className="flex items-center justify-between text-[10px]"
                                 >
-                                  <span className="truncate font-medium text-[#354153]">
+                                  <span className="truncate font-medium text-ink">
                                     {idx + 1}. {ex.name}
                                   </span>
-                                  <span className="shrink-0 text-[9px] text-[#8993a0]">
+                                  <span className="shrink-0 text-[9px] text-ink-muted">
                                     {ex.sets}×{ex.reps}
                                   </span>
                                 </li>
@@ -659,7 +656,7 @@ export function TrainerPortalView({
                           <button
                             type="button"
                             onClick={() => openNewSessionFor(client.id)}
-                            className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-[#cfe5d9] bg-white text-[10px] font-semibold text-[#278968] hover:bg-[#f0f9f4]"
+                            className={`${ui.btnSecondary} min-h-9 w-full text-[10px]`}
                           >
                             <CalendarPlus size={13} aria-hidden="true" />
                             Schedule session with {client.name.split(" ")[0]}
@@ -671,7 +668,7 @@ export function TrainerPortalView({
                 })}
 
                 {filteredTrainees.length === 0 && (
-                  <li className="rounded-2xl border border-[#e9edf1] bg-white p-6 text-center text-[11px] text-[#8993a0]">
+                  <li className={`${ui.card} p-6 text-center text-[11px] text-ink-secondary`}>
                     {trainees.length === 0
                       ? "No trainees assigned to you yet. Gym staff can assign members on the Trainers page."
                       : "No trainees match this filter."}
@@ -685,12 +682,12 @@ export function TrainerPortalView({
             <section aria-labelledby="trainer-schedule-heading">
               <div className="mb-3.5 flex items-start justify-between gap-2">
                 <div>
-                  <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#83908d]">
+                  <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
                     Coaching calendar
                   </p>
                   <h2
                     id="trainer-schedule-heading"
-                    className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-[#243242]"
+                    className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
                   >
                     Your schedule
                   </h2>
@@ -699,7 +696,7 @@ export function TrainerPortalView({
                   <button
                     type="button"
                     onClick={() => openNewSessionFor()}
-                    className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-[#278968] px-2.5 text-[10px] font-semibold text-white hover:bg-[#207858]"
+                    className={`${ui.btnPrimary} min-h-8 px-2.5 text-[10px]`}
                   >
                     <CalendarPlus size={12} aria-hidden="true" />
                     New session
@@ -707,14 +704,14 @@ export function TrainerPortalView({
                 )}
               </div>
 
-              <div className="mb-4 grid grid-cols-2 gap-1.5 rounded-xl bg-[#ebeff2] p-1">
+              <div className={`mb-4 grid grid-cols-2 gap-1.5 ${ui.segmentedTrack}`}>
                 <button
                   type="button"
                   onClick={() => setScheduleSubTab("sessions")}
-                  className={`min-h-8 rounded-lg text-[10px] font-semibold transition-colors ${
+                  className={`min-h-8 rounded-xl text-[10px] font-semibold transition-colors ${
                     scheduleSubTab === "sessions"
-                      ? "bg-white text-[#243242] shadow-sm"
-                      : "text-[#6f7b89]"
+                      ? "bg-elevated text-ink"
+                      : "text-ink-secondary hover:text-ink"
                   }`}
                 >
                   Sessions ({upcomingSessions.length})
@@ -722,10 +719,10 @@ export function TrainerPortalView({
                 <button
                   type="button"
                   onClick={() => setScheduleSubTab("hours")}
-                  className={`min-h-8 rounded-lg text-[10px] font-semibold transition-colors ${
+                  className={`min-h-8 rounded-xl text-[10px] font-semibold transition-colors ${
                     scheduleSubTab === "hours"
-                      ? "bg-white text-[#243242] shadow-sm"
-                      : "text-[#6f7b89]"
+                      ? "bg-elevated text-ink"
+                      : "text-ink-secondary hover:text-ink"
                   }`}
                 >
                   Weekly Shifts
@@ -735,46 +732,43 @@ export function TrainerPortalView({
               {scheduleSubTab === "sessions" ? (
                 <ul className="space-y-2.5">
                   {sessions.map((session) => (
-                    <li
-                      key={session.id}
-                      className="rounded-2xl border border-[#e9edf1] bg-white p-3.5"
-                    >
+                    <li key={session.id} className={`${ui.card} p-3.5`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-[11px] font-semibold text-[#354153]">
+                          <p className="text-[11px] font-semibold text-ink">
                             {session.title}
                           </p>
-                          <p className="mt-0.5 text-[10px] font-medium text-[#278968]">
+                          <p className="mt-0.5 text-[10px] font-medium text-accent-text">
                             with {session.memberName}
                           </p>
                         </div>
                         <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[8px] font-semibold ${
-                            session.status === "scheduled"
-                              ? "bg-[#e9f2ff] text-[#3f68b2]"
-                              : session.status === "completed"
-                                ? "bg-[#eaf6f0] text-[#278968]"
-                                : "bg-[#fff0ee] text-[#c4544c]"
-                          }`}
+                          className={
+                            session.status === "completed"
+                              ? ui.badgeAccent
+                              : session.status === "scheduled"
+                                ? ui.badgeNeutral
+                                : ui.badgeDanger
+                          }
                         >
                           {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
                         </span>
                       </div>
 
-                      <div className="mt-2 flex items-center gap-2 text-[10px] text-[#7b8794]">
+                      <div className="mt-2 flex items-center gap-2 text-[10px] text-ink-secondary">
                         <Clock3 size={12} aria-hidden="true" />
                         <span>
                           {formatShortDateTime(session.startsAt)} · {session.durationMinutes} min
                         </span>
                       </div>
                       {session.notes && (
-                        <p className="mt-1.5 rounded-lg bg-[#f7f9fa] px-2.5 py-1.5 text-[9px] text-[#687585]">
+                        <p className={`${ui.cardSubtle} mt-1.5 px-2.5 py-1.5 text-[9px] text-ink-secondary`}>
                           {session.notes}
                         </p>
                       )}
 
                       {session.status === "scheduled" && (
-                        <div className="mt-3 flex gap-2 border-t border-[#edf0f2] pt-2.5">
+                        <div className="mt-3 flex gap-2 border-t border-divider pt-2.5">
                           <button
                             type="button"
                             disabled={isSaving}
@@ -785,7 +779,7 @@ export function TrainerPortalView({
                                 status: "completed",
                               })
                             }
-                            className="inline-flex min-h-8 flex-1 items-center justify-center gap-1 rounded-lg bg-[#eaf6f0] text-[10px] font-semibold text-[#278968] hover:bg-[#dcefe4]"
+                            className="inline-flex min-h-8 flex-1 items-center justify-center gap-1 rounded-lg border border-accent-border bg-accent-soft text-[10px] font-semibold text-accent-text transition-colors hover:bg-hover"
                           >
                             <Check size={12} aria-hidden="true" />
                             Mark completed
@@ -800,7 +794,7 @@ export function TrainerPortalView({
                                 status: "cancelled",
                               })
                             }
-                            className="inline-flex min-h-8 items-center justify-center rounded-lg border border-[#e3e8ec] px-3 text-[10px] font-medium text-[#788391] hover:bg-[#f7f9fa]"
+                            className={`${ui.btnSecondary} min-h-8 px-3 text-[10px]`}
                           >
                             Cancel
                           </button>
@@ -809,7 +803,7 @@ export function TrainerPortalView({
                     </li>
                   ))}
                   {sessions.length === 0 && (
-                    <li className="rounded-2xl border border-[#e9edf1] bg-white p-6 text-center text-[11px] text-[#8993a0]">
+                    <li className={`${ui.card} p-6 text-center text-[11px] text-ink-secondary`}>
                       No sessions scheduled yet.{" "}
                       {trainees.length > 0
                         ? "Tap “New session” above to book a client."
@@ -818,8 +812,8 @@ export function TrainerPortalView({
                   )}
                 </ul>
               ) : (
-                <div className="space-y-3 rounded-2xl border border-[#e9edf1] bg-white p-4">
-                  <p className="text-[10px] text-[#7b8794]">
+                <div className={`${ui.card} space-y-3 p-4`}>
+                  <p className="text-[10px] text-ink-secondary">
                     Set your weekly gym floor hours so front-desk staff and trainees know your
                     coaching availability.
                   </p>
@@ -829,15 +823,15 @@ export function TrainerPortalView({
                       return (
                         <div
                           key={day}
-                          className="flex items-center justify-between gap-2 rounded-xl border border-[#edf0f2] px-3 py-2"
+                          className="flex items-center justify-between gap-2 rounded-xl border border-line bg-subtle px-3 py-2"
                         >
                           <button
                             type="button"
                             onClick={() => toggleWorkDay(day)}
-                            className={`min-h-7 w-14 rounded-lg text-[10px] font-semibold ${
+                            className={`min-h-7 w-14 rounded-lg text-[10px] font-semibold transition-colors ${
                               slot
-                                ? "bg-[#278968] text-white"
-                                : "bg-[#f2f4f6] text-[#8993a0]"
+                                ? "bg-accent text-on-accent"
+                                : "border border-line-strong bg-surface text-ink-muted"
                             }`}
                           >
                             {day}
@@ -850,20 +844,20 @@ export function TrainerPortalView({
                                 onChange={(e) =>
                                   updateWorkDayTime(day, "startTime", e.target.value)
                                 }
-                                className="rounded-md border border-[#e3e8ec] px-1.5 py-1 text-[10px] text-[#354153]"
+                                className="rounded-md border border-line-strong bg-input px-1.5 py-1 text-[10px] text-ink"
                               />
-                              <span className="text-[#9aa3ae]">–</span>
+                              <span className="text-ink-muted">–</span>
                               <input
                                 type="time"
                                 value={slot.endTime}
                                 onChange={(e) =>
                                   updateWorkDayTime(day, "endTime", e.target.value)
                                 }
-                                className="rounded-md border border-[#e3e8ec] px-1.5 py-1 text-[10px] text-[#354153]"
+                                className="rounded-md border border-line-strong bg-input px-1.5 py-1 text-[10px] text-ink"
                               />
                             </div>
                           ) : (
-                            <span className="text-[10px] text-[#9aa3ae]">Day off</span>
+                            <span className="text-[10px] text-ink-muted">Day off</span>
                           )}
                         </div>
                       );
@@ -873,7 +867,7 @@ export function TrainerPortalView({
                     type="button"
                     disabled={isSaving}
                     onClick={() => void saveAvailability()}
-                    className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-[#278968] text-[11px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+                    className={`${ui.btnPrimary} min-h-10 w-full text-[11px]`}
                   >
                     {availabilitySaved ? (
                       <>
@@ -892,21 +886,21 @@ export function TrainerPortalView({
           )}
 
           {activeTab === "Profile" && (
-            <section aria-labelledby="coach-profile-heading">
-              <div className="mb-4">
-                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#83908d]">
+            <section aria-labelledby="coach-profile-heading" className="space-y-3">
+              <div className="mb-1">
+                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
                   Coach account
                 </p>
                 <h2
                   id="coach-profile-heading"
-                  className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-[#243242]"
+                  className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
                 >
                   Profile &amp; check-ins
                 </h2>
               </div>
 
-              <div className="mb-3 flex items-center gap-3 rounded-2xl border border-[#e9edf1] bg-white p-4">
-                <span className="grid size-12 shrink-0 place-items-center rounded-full bg-[#eef2ff] text-[13px] font-semibold text-[#3f64a8]">
+              <div className={`${ui.card} flex items-center gap-3 p-4`}>
+                <span className="grid size-12 shrink-0 place-items-center rounded-full border border-accent-border bg-accent-soft text-[13px] font-semibold text-accent-text">
                   {trainer.name
                     .split(" ")
                     .map((p) => p[0])
@@ -915,41 +909,43 @@ export function TrainerPortalView({
                     .toUpperCase()}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-[13px] font-semibold text-[#354153]">
+                  <p className="truncate text-[13px] font-semibold text-ink">
                     {trainer.name}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] font-medium text-[#278968]">
+                  <p className="mt-0.5 truncate text-[10px] font-medium text-accent-text">
                     {trainer.specialty}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] text-[#87909d]">
+                  <p className="mt-0.5 truncate text-[10px] text-ink-secondary">
                     {trainer.phone}
                     {trainer.email ? ` · ${trainer.email}` : ""}
                   </p>
                 </div>
               </div>
 
-              <div className="mb-4 rounded-2xl border border-[#e9edf1] bg-white p-4">
+              <ThemePreferenceControl />
+
+              <div className={`${ui.card} p-4`}>
                 <div className="mb-2.5 flex items-center gap-2">
-                  <Sparkles size={14} className="text-[#278968]" aria-hidden="true" />
-                  <p className="text-[11px] font-semibold text-[#354153]">
+                  <Sparkles size={14} className="text-accent-text" aria-hidden="true" />
+                  <p className="text-[11px] font-semibold text-ink">
                     Recent gym check-ins ({visits.length})
                   </p>
                 </div>
-                <ul className="divide-y divide-[#eff1f4]">
+                <ul className="divide-y divide-divider">
                   {visits.slice(0, 6).map((visit) => (
                     <li
                       key={visit.id}
                       className="flex items-center justify-between py-2 text-[10px]"
                     >
                       <div>
-                        <p className="font-semibold text-[#354153]">{visit.date}</p>
-                        <p className="text-[9px] text-[#8993a0]">{visit.detail}</p>
+                        <p className="font-semibold text-ink">{visit.date}</p>
+                        <p className="text-[9px] text-ink-muted">{visit.detail}</p>
                       </div>
-                      <span className="font-medium text-[#687585]">{visit.time}</span>
+                      <span className="font-medium text-ink-secondary">{visit.time}</span>
                     </li>
                   ))}
                   {visits.length === 0 && (
-                    <li className="py-3 text-center text-[10px] text-[#8993a0]">
+                    <li className="py-3 text-center text-[10px] text-ink-muted">
                       No floor check-ins yet. Scan the Reception QR code when you arrive!
                     </li>
                   )}
@@ -960,7 +956,7 @@ export function TrainerPortalView({
                 type="button"
                 onClick={() => void onLogout()}
                 disabled={isLoggingOut}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#f0d5d3] bg-white text-[11px] font-semibold text-[#a64141] hover:bg-[#fff6f5] disabled:opacity-60"
+                className={`${ui.btnDangerOutline} min-h-11 w-full text-[11px]`}
               >
                 <LogOut size={15} aria-hidden="true" />
                 {isLoggingOut ? "Signing out…" : "Sign out"}
@@ -971,7 +967,7 @@ export function TrainerPortalView({
 
         <nav
           aria-label="Trainer app navigation"
-          className="grid grid-cols-4 border-t border-[#edf0f2] bg-white px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2"
+          className={`grid grid-cols-4 px-2 ${ui.bottomNav}`}
         >
           {tabs.map(({ label, icon: Icon }) => (
             <button
@@ -979,8 +975,8 @@ export function TrainerPortalView({
               type="button"
               aria-current={activeTab === label ? "page" : undefined}
               onClick={() => setActiveTab(label)}
-              className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg text-[9px] font-medium ${
-                activeTab === label ? "text-[#278968]" : "text-[#98a2ad]"
+              className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg text-[9px] font-medium transition-colors ${
+                activeTab === label ? "text-accent-text" : "text-ink-muted hover:text-ink-secondary"
               }`}
             >
               <Icon size={18} aria-hidden="true" />
@@ -991,21 +987,28 @@ export function TrainerPortalView({
       </section>
 
       {isNewSessionOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101b26]/70 p-4 backdrop-blur-sm">
+        <div
+          className={ui.modalBackdrop}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !isSaving) {
+              setIsNewSessionOpen(false);
+            }
+          }}
+        >
           <section
             role="dialog"
             aria-modal="true"
             aria-labelledby="new-session-title"
-            className="w-full max-w-[380px] rounded-[24px] bg-white p-5 shadow-[0_24px_80px_rgba(10,18,27,0.35)]"
+            className={`${ui.modalCard} max-w-[380px] p-5`}
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#83908d]">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
                   Coach Schedule
                 </p>
                 <h2
                   id="new-session-title"
-                  className="mt-0.5 text-[15px] font-semibold text-[#243242]"
+                  className="mt-0.5 text-[15px] font-semibold text-ink"
                 >
                   Schedule training session
                 </h2>
@@ -1014,7 +1017,7 @@ export function TrainerPortalView({
                 type="button"
                 aria-label="Close"
                 onClick={() => setIsNewSessionOpen(false)}
-                className="grid size-8 place-items-center rounded-lg text-[#788391] hover:bg-[#f4f6f7]"
+                className={`${ui.btnGhost} size-8`}
               >
                 <X size={17} aria-hidden="true" />
               </button>
@@ -1022,14 +1025,14 @@ export function TrainerPortalView({
 
             <form onSubmit={submitNewSession} className="space-y-3">
               <label className="block">
-                <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                   Trainee
                 </span>
                 <select
                   required
                   value={sessionMemberId}
                   onChange={(e) => setSessionMemberId(e.target.value)}
-                  className="min-h-10 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[11px] text-[#344052]"
+                  className={`${ui.select} text-[11px]`}
                 >
                   {trainees.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -1040,7 +1043,7 @@ export function TrainerPortalView({
               </label>
 
               <label className="block">
-                <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                   Session focus
                 </span>
                 <input
@@ -1048,13 +1051,13 @@ export function TrainerPortalView({
                   maxLength={80}
                   value={sessionTitle}
                   onChange={(e) => setSessionTitle(e.target.value)}
-                  className="min-h-10 w-full rounded-lg border border-[#e3e8ec] px-3 text-[11px] text-[#344052]"
+                  className={`${ui.input} min-h-10 text-[11px]`}
                 />
               </label>
 
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                  <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                     Date &amp; time
                   </span>
                   <input
@@ -1062,17 +1065,17 @@ export function TrainerPortalView({
                     required
                     value={sessionStartsAt}
                     onChange={(e) => setSessionStartsAt(e.target.value)}
-                    className="min-h-10 w-full rounded-lg border border-[#e3e8ec] px-2 text-[10px] text-[#344052]"
+                    className={`${ui.input} min-h-10 px-2 text-[10px]`}
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                  <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                     Duration
                   </span>
                   <select
                     value={sessionDuration}
                     onChange={(e) => setSessionDuration(Number(e.target.value))}
-                    className="min-h-10 w-full rounded-lg border border-[#e3e8ec] bg-white px-2 text-[11px] text-[#344052]"
+                    className={`${ui.select} px-2 text-[11px]`}
                   >
                     <option value={30}>30 min</option>
                     <option value={45}>45 min</option>
@@ -1083,22 +1086,22 @@ export function TrainerPortalView({
               </div>
 
               <label className="block">
-                <span className="mb-1 block text-[10px] font-medium text-[#526071]">
-                  Notes <span className="font-normal text-[#9aa3ae]">(optional)</span>
+                <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
+                  Notes <span className="font-normal text-ink-muted">(optional)</span>
                 </span>
                 <input
                   maxLength={240}
                   value={sessionNotes}
                   onChange={(e) => setSessionNotes(e.target.value)}
                   placeholder="e.g. Heavy squat progression"
-                  className="min-h-10 w-full rounded-lg border border-[#e3e8ec] px-3 text-[11px] text-[#344052]"
+                  className={`${ui.input} min-h-10 text-[11px]`}
                 />
               </label>
 
               {actionError && (
                 <p
                   role="alert"
-                  className="rounded-lg bg-[#fff1ef] px-3 py-2 text-[10px] text-[#a9433b]"
+                  className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-[10px] text-danger-text"
                 >
                   {actionError}
                 </p>
@@ -1107,7 +1110,7 @@ export function TrainerPortalView({
               <button
                 type="submit"
                 disabled={isSaving}
-                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#278968] text-[12px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+                className={`${ui.btnPrimary} min-h-11 w-full text-[12px]`}
               >
                 {isSaving && (
                   <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />

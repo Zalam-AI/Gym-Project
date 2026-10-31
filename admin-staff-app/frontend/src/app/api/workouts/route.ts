@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import {
+  upsertExerciseMediaCatalog,
+  type CatalogExerciseMediaInput,
+} from "gymos-admin-backend/lib/exercise-media-catalog";
 import MemberModel from "gymos-admin-backend/models/member";
 import WorkoutPlanModel from "gymos-admin-backend/models/workout-plan";
 import { requireStaffContext } from "@/lib/gym-context";
@@ -161,7 +165,66 @@ export async function POST(request: Request) {
       });
     }
 
-    if (input.action !== "create") return NextResponse.json({ error: "action must be create or assign." }, { status: 400 });
+    if (input.action === "upsert-exercise-media") {
+      const rawItems = Array.isArray(input.items)
+        ? input.items
+        : input.exerciseName
+          ? [input]
+          : [];
+      if (rawItems.length < 1 || rawItems.length > 500) {
+        return NextResponse.json(
+          { error: "Provide between 1 and 500 exercise media items." },
+          { status: 400 },
+        );
+      }
+      const mapped: CatalogExerciseMediaInput[] = [];
+      for (const item of rawItems) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const obj = item as Record<string, unknown>;
+        const exerciseName =
+          typeof obj.exerciseName === "string" ? obj.exerciseName.trim() : "";
+        if (!exerciseName) continue;
+        mapped.push({
+          exerciseName,
+          exerciseKey:
+            typeof obj.exerciseKey === "string" ? obj.exerciseKey : undefined,
+          aliases: Array.isArray(obj.aliases)
+            ? obj.aliases.filter((a): a is string => typeof a === "string")
+            : [],
+          targetMuscleGroup:
+            typeof obj.targetMuscleGroup === "string"
+              ? obj.targetMuscleGroup
+              : undefined,
+          equipment:
+            typeof obj.equipment === "string" ? obj.equipment : undefined,
+          mediaType:
+            typeof obj.mediaType === "string"
+              ? (obj.mediaType as CatalogExerciseMediaInput["mediaType"])
+              : "svg_2d",
+          mediaSource:
+            typeof obj.mediaSource === "string"
+              ? (obj.mediaSource as CatalogExerciseMediaInput["mediaSource"])
+              : undefined,
+          mediaUrl: typeof obj.mediaUrl === "string" ? obj.mediaUrl : undefined,
+          posterUrl:
+            typeof obj.posterUrl === "string" ? obj.posterUrl : undefined,
+          providerName:
+            typeof obj.providerName === "string" ? obj.providerName : undefined,
+          providerExerciseId:
+            typeof obj.providerExerciseId === "string"
+              ? obj.providerExerciseId
+              : undefined,
+          animationKey:
+            typeof obj.animationKey === "string" ? obj.animationKey : undefined,
+          formCue: typeof obj.formCue === "string" ? obj.formCue : undefined,
+          license: typeof obj.license === "string" ? obj.license : undefined,
+        });
+      }
+      const upsertedCount = await upsertExerciseMediaCatalog(mapped, gymId);
+      return NextResponse.json({ ok: true, upsertedCount });
+    }
+
+    if (input.action !== "create") return NextResponse.json({ error: "action must be create, assign, or upsert-exercise-media." }, { status: 400 });
     const title = typeof input.title === "string" ? input.title.trim() : "";
     const targetGoal = typeof input.targetGoal === "string" ? input.targetGoal.trim() : "";
     if (!title || !targetGoal || title.length > 80 || targetGoal.length > 80) {

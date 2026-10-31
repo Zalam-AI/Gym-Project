@@ -1,9 +1,124 @@
 @import "tailwindcss";
 
-:root {
+:root,
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-canvas: #0b0d10;
+  --bg-app: #121417;
+  --bg-surface: #1a1d22;
+  --bg-elevated: #22262d;
+  --bg-subtle: #15181c;
+  --bg-input: #15181c;
+  --bg-hover: #252a32;
+
+  --text-primary: #f3f5f7;
+  --text-secondary: #9ba3af;
+  --text-muted: #6c7480;
+  --text-on-accent: #ffffff;
+
+  --accent: #2fb386;
+  --accent-hover: #269a72;
+  --accent-soft: rgba(47, 179, 134, 0.14);
+  --accent-border: rgba(47, 179, 134, 0.30);
+  --accent-text: #5cd3aa;
+
+  --border-subtle: #262b33;
+  --border-strong: #353c47;
+  --divider: #22262e;
+
+  --danger: #dc5b53;
+  --danger-soft: rgba(220, 91, 83, 0.13);
+  --danger-border: rgba(220, 91, 83, 0.30);
+  --danger-text: #f28b84;
+
+  --warning-soft: rgba(217, 155, 67, 0.13);
+  --warning-border: rgba(217, 155, 67, 0.30);
+  --warning-text: #ebb567;
+
+  --backdrop: rgba(5, 7, 10, 0.78);
+  --camera-well: #0d1014;
+  --camera-reticle: #5cd3aa;
+  --focus-ring: rgba(47, 179, 134, 0.45);
+  --selection-bg: rgba(47, 179, 134, 0.28);
+}
+
+html[data-theme="light"] {
   color-scheme: light;
-  --background: #f7f8fa;
-  --foreground: #18212f;
+  --bg-canvas: #eceff3;
+  --bg-app: #f5f7f9;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #eef1f5;
+  --bg-input: #ffffff;
+  --bg-hover: #f2f5f8;
+
+  --text-primary: #161d26;
+  --text-secondary: #5c6674;
+  --text-muted: #85909e;
+  --text-on-accent: #ffffff;
+
+  --accent: #238564;
+  --accent-hover: #1c6e52;
+  --accent-soft: rgba(35, 133, 100, 0.10);
+  --accent-border: rgba(35, 133, 100, 0.26);
+  --accent-text: #1d7557;
+
+  --border-subtle: #e3e8ee;
+  --border-strong: #cfd7e0;
+  --divider: #ebeff4;
+
+  --danger: #c44941;
+  --danger-soft: rgba(196, 73, 65, 0.09);
+  --danger-border: rgba(196, 73, 65, 0.25);
+  --danger-text: #b43e36;
+
+  --warning-soft: rgba(189, 120, 56, 0.10);
+  --warning-border: rgba(189, 120, 56, 0.26);
+  --warning-text: #945d27;
+
+  --backdrop: rgba(15, 23, 34, 0.52);
+  --camera-well: #0d1014;
+  --camera-reticle: #5cd3aa;
+  --focus-ring: rgba(35, 133, 100, 0.38);
+  --selection-bg: rgba(35, 133, 100, 0.18);
+}
+
+@theme inline {
+  --color-canvas: var(--bg-canvas);
+  --color-app: var(--bg-app);
+  --color-surface: var(--bg-surface);
+  --color-elevated: var(--bg-elevated);
+  --color-subtle: var(--bg-subtle);
+  --color-input: var(--bg-input);
+  --color-hover: var(--bg-hover);
+
+  --color-ink: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-muted: var(--text-muted);
+  --color-on-accent: var(--text-on-accent);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-border: var(--accent-border);
+  --color-accent-text: var(--accent-text);
+
+  --color-line: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+  --color-divider: var(--divider);
+
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-border: var(--danger-border);
+  --color-danger-text: var(--danger-text);
+
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-warning-text: var(--warning-text);
+
+  --color-backdrop: var(--backdrop);
+  --color-camera-well: var(--camera-well);
+  --color-camera-reticle: var(--camera-reticle);
 }
 
 * {
@@ -13,9 +128,9 @@
 body {
   min-height: 100vh;
   margin: 0;
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -25,13 +140,40 @@ a {
 }
 
 button:focus-visible,
-a:focus-visible {
-  outline: 3px solid #78c5a6;
-  outline-offset: 3px;
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+select option {
+  background-color: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text-primary);
+  box-shadow: 0 0 0 1000px var(--bg-input) inset;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Third-party html5-qrcode viewfinder compatibility */
+#gymos-qr-reader {
+  border: none !important;
+  background-color: #0d1014 !important;
+}
+
+#gymos-qr-reader video,
+#gymos-qr-reader canvas {
+  border-radius: 16px;
 }
 
 ::selection {
-  background: #d7eee5;
+  background: var(--selection-bg);
 }
 
 .scanner-sweep {

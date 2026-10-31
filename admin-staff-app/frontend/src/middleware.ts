@@ -168,6 +168,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
   if (
+    pathname === "/api/member-workouts" &&
+    (request.method === "GET" || request.method === "POST" || request.method === "OPTIONS")
+  ) {
+    return NextResponse.next();
+  }
+  if (
     pathname === "/api/member-subscriptions" &&
     (request.method === "GET" || request.method === "POST" || request.method === "OPTIONS")
   ) {

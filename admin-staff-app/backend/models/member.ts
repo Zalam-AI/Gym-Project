@@ -27,6 +27,41 @@ const memberSchema = new Schema(
       trim: true,
       default: "",
     },
+    activeRoutineMode: {
+      type: String,
+      enum: ["personal", "gym", "none"],
+      default: "none",
+    },
+    selectedGymWorkoutPlanId: {
+      type: Schema.Types.ObjectId,
+      ref: "WorkoutPlan",
+      default: null,
+    },
+    defaultRestSeconds: {
+      type: Number,
+      min: 15,
+      max: 600,
+      default: 60,
+    },
+    restVibrationEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    restNotificationsEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    progressionPace: {
+      type: String,
+      enum: ["conservative", "balanced", "aggressive"],
+      default: "balanced",
+    },
+    preferredIncrementKg: {
+      type: Number,
+      min: 0,
+      max: 10,
+      default: 2.5,
+    },
     joinDate: { type: Date, required: true, default: Date.now },
   },
   { timestamps: { createdAt: true, updatedAt: false } },
