@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { PwaRegister } from "@/components/pwa-register";
 import { LanguageProvider } from "@/lib/i18n";
+import { RestTimerSettingsProvider } from "@/lib/rest-timer";
+import { THEME_BOOTSTRAP_SCRIPT, ThemeProvider } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -26,7 +28,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#172433",
+  themeColor: "#121417",
 };
 
 export default function RootLayout({
@@ -35,10 +37,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
+      </head>
       <body className="antialiased" suppressHydrationWarning>
         <PwaRegister />
-        <LanguageProvider>{children}</LanguageProvider>
+        <ThemeProvider>
+          <RestTimerSettingsProvider>
+            <LanguageProvider>{children}</LanguageProvider>
+          </RestTimerSettingsProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

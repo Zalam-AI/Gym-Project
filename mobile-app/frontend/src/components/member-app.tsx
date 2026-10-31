@@ -1,26 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  BookOpen,
   CalendarDays,
   Camera,
   Check,
   CheckCircle2,
-  Circle,
   Clock3,
   CreditCard,
   Dumbbell,
   History,
+  House,
   KeyRound,
   LoaderCircle,
   LogOut,
+  Moon,
+  Play,
   QrCode,
   RotateCcw,
   ScanLine,
   ShieldCheck,
+  TrendingUp,
   UserRound,
   Wallet,
   X,
+  Zap,
 } from "lucide-react";
 import {
   TrainerPortalView,
@@ -37,19 +42,63 @@ import {
   type GymPlanOption,
   type PendingSubscriptionInfo,
 } from "@/components/member-onboarding-view";
+import {
+  MemberWorkoutHub,
+  type ActiveRoutineSelection,
+  type ActiveSessionSummary,
+  type ActiveWorkoutSession,
+  type ExerciseDefaultStat,
+  type GymAssignedWorkoutPlan,
+  type PersonalRoutine,
+  type RoutineWeekday,
+} from "@/components/member-workout-hub";
+import {
+  MemberProgressView,
+  type LoggedWorkoutItem,
+  type MemberProgressSummary,
+} from "@/components/member-progress-view";
+import type { ExerciseMediaCatalogEntry } from "@/lib/exercise-media";
+import type { MemberAchievementsSummary } from "@/lib/workout-achievements";
 import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearMobileSessionToken,
   getMobileSessionToken,
   mobileFetch,
   readMobileJson,
-  safeLocalGet,
-  safeLocalRemove,
-  safeLocalSet,
   setMobileSessionToken,
 } from "@/lib/mobile-fetch";
+import {
+  RestTimerSettingsControl,
+  useRestTimerSettings,
+  type RestTimerSettings,
+} from "@/lib/rest-timer";
+import {
+  DEFAULT_PROGRESSION_RULE_SETTINGS,
+  type ExerciseHistorySummary,
+  type ProgressionRuleSettings,
+} from "@/lib/workout-progression";
+import {
+  ThemeHeaderSwitch,
+  ThemePreferenceControl,
+  ui,
+} from "@/lib/theme";
 
-type AppTab = "Pass" | "Workout" | "Visits" | "Profile";
+type AppTab = "Pass" | "Workout" | "Progress" | "Visits" | "Profile";
+
+const EMPTY_PROGRESS_SUMMARY: MemberProgressSummary = {
+  totalWorkouts: 0,
+  workoutsThisWeek: 0,
+  workoutsThisMonth: 0,
+  workoutsLast30Days: 0,
+  currentStreakDays: 0,
+  totalPersonalRecords: 0,
+  totalVolumeKg: 0,
+  volumeLast30DaysKg: 0,
+  totalMinutesTrained: 0,
+  weeklyActivity: [],
+  muscleBreakdown: [],
+  personalRecords: [],
+};
 
 type MemberProfile = {
   id: string;
@@ -178,6 +227,110 @@ function formatVisit(value: string, id: string, source: string): FormattedVisit 
   };
 }
 
+const HOME_WEEKDAYS: RoutineWeekday[] = [
+  "Sat",
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+];
+
+const HOME_WEEKDAY_FULL: Record<RoutineWeekday, string> = {
+  Sat: "Saturday",
+  Sun: "Sunday",
+  Mon: "Monday",
+  Tue: "Tuesday",
+  Wed: "Wednesday",
+  Thu: "Thursday",
+  Fri: "Friday",
+};
+
+const JS_DAY_TO_HOME_WEEKDAY: RoutineWeekday[] = [
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat",
+];
+
+function estimateWorkoutMinutes(
+  exercises: Array<{ sets: number | string; restSeconds?: number; rest?: string }>,
+): number {
+  if (exercises.length === 0) return 0;
+  let totalSeconds = 0;
+  for (const ex of exercises) {
+    const setsNum =
+      typeof ex.sets === "number"
+        ? Math.max(1, ex.sets)
+        : Math.max(1, Number.parseInt(String(ex.sets), 10) || 3);
+    const restSec =
+      typeof ex.restSeconds === "number" && ex.restSeconds > 0
+        ? ex.restSeconds
+        : ex.rest
+          ? Math.max(30, Number.parseInt(ex.rest, 10) || 60)
+          : 60;
+    totalSeconds += setsNum * (42 + restSec) + 45;
+  }
+  return Math.max(15, Math.round(totalSeconds / 60));
+}
+
+function formatRecentWorkoutDate(iso: string): string {
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return "—";
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(dt, now)) return "Today";
+  if (sameDay(dt, yesterday)) return "Yesterday";
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+  }).format(dt);
+}
+
+function normalizeHomeRoutineDays(routine: PersonalRoutine) {
+  if (routine.daySchedule && routine.daySchedule.length > 0) {
+    const byDay = new Map(routine.daySchedule.map((d) => [d.day, d]));
+    return HOME_WEEKDAYS.map((day) => {
+      const found = byDay.get(day);
+      if (!found || found.isRestDay || found.exercises.length === 0) {
+        return {
+          day,
+          isRestDay: true,
+          focusLabel: "Rest",
+          exercises: [] as PersonalRoutine["exercises"],
+        };
+      }
+      return {
+        day,
+        isRestDay: false,
+        focusLabel: found.focusLabel || routine.targetGoal || "Training",
+        exercises: found.exercises,
+      };
+    });
+  }
+  const scheduled = new Set<RoutineWeekday>(routine.scheduledDays ?? []);
+  return HOME_WEEKDAYS.map((day) => {
+    const isTraining =
+      (scheduled.size === 0 ? true : scheduled.has(day)) &&
+      routine.exercises.length > 0;
+    return {
+      day,
+      isRestDay: !isTraining,
+      focusLabel: isTraining ? routine.targetGoal || "Training" : "Rest",
+      exercises: isTraining ? routine.exercises : [],
+    };
+  });
+}
+
 function AppBottomNav({
   activeTab,
   onSelect,
@@ -185,30 +338,31 @@ function AppBottomNav({
   activeTab: AppTab;
   onSelect: (tab: AppTab) => void;
 }) {
-  const tabs: Array<{ label: AppTab; icon: typeof QrCode }> = [
-    { label: "Pass", icon: QrCode },
-    { label: "Workout", icon: Dumbbell },
-    { label: "Visits", icon: History },
-    { label: "Profile", icon: UserRound },
+  const tabs: Array<{ id: AppTab; title: string; icon: typeof QrCode }> = [
+    { id: "Pass", title: "Home", icon: House },
+    { id: "Workout", title: "Workout", icon: Dumbbell },
+    { id: "Progress", title: "Progress", icon: TrendingUp },
+    { id: "Visits", title: "Visits", icon: History },
+    { id: "Profile", title: "Profile", icon: UserRound },
   ];
 
   return (
     <nav
       aria-label="Member app navigation"
-      className="grid grid-cols-4 border-t border-[#edf0f2] bg-white px-2 pb-[max(env(safe-area-inset-bottom),8px)] pt-2"
+      className={`grid grid-cols-5 px-1.5 ${ui.bottomNav}`}
     >
-      {tabs.map(({ label, icon: Icon }) => (
+      {tabs.map(({ id, title, icon: Icon }) => (
         <button
-          key={label}
+          key={id}
           type="button"
-          aria-current={activeTab === label ? "page" : undefined}
-          onClick={() => onSelect(label)}
-          className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg text-[9px] font-medium ${
-            activeTab === label ? "text-[#278968]" : "text-[#98a2ad]"
+          aria-current={activeTab === id ? "page" : undefined}
+          onClick={() => onSelect(id)}
+          className={`flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg text-[9px] font-medium transition-colors ${
+            activeTab === id ? "text-accent-text" : "text-ink-muted hover:text-ink-secondary"
           }`}
         >
           <Icon size={18} aria-hidden="true" />
-          {label}
+          {title}
         </button>
       ))}
     </nav>
@@ -369,19 +523,18 @@ function MobileAuthScreen({
     }
   }
 
-  const fieldClass =
-    "min-h-11 w-full rounded-lg border border-[#e3e8ec] bg-white px-3 text-[12px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994] focus:ring-2 focus:ring-[#55b994]/15";
+  const fieldClass = ui.input;
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
+    <main className={ui.pageCanvas}>
       <section
         aria-label="GymOS mobile authentication"
-        className="flex min-h-[100dvh] w-full max-w-[430px] flex-col bg-[#f7f8fa] shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:min-h-[760px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
+        className={ui.authFrame}
       >
-        <header className="flex min-h-[72px] items-center justify-between border-b border-[#edf0f2] bg-white px-5 pt-[max(env(safe-area-inset-top),8px)]">
+        <header className={ui.appHeader}>
           <div className="flex items-center gap-3">
             <span
-              className="grid size-9 place-items-center rounded-xl bg-[#45b58b] text-[14px] font-bold text-white"
+              className="grid size-9 place-items-center rounded-xl bg-accent text-[14px] font-bold text-on-accent"
               aria-hidden="true"
             >
               G
@@ -389,30 +542,33 @@ function MobileAuthScreen({
             <div>
               <p
                 data-no-translate="true"
-                className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+                className="text-[13px] font-semibold tracking-[-0.03em] text-ink"
               >
-                Gym<span className="text-[#2d9d78]">OS</span>
+                Gym<span className="text-accent-text">OS</span>
               </p>
-              <p className="text-[9px] text-[#8993a0]">MEMBERS &amp; TRAINERS</p>
+              <p className="text-[9px] text-ink-muted">MEMBERS &amp; TRAINERS</p>
             </div>
           </div>
-          <LanguageSwitch />
+          <div className="flex items-center gap-1.5">
+            <ThemeHeaderSwitch />
+            <LanguageSwitch />
+          </div>
         </header>
 
         <div className="flex flex-1 items-center overflow-y-auto px-5 py-6">
           <div className="w-full">
             <div className="mb-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#83908d]">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
                 GymOS Mobile
               </p>
-              <h1 className="mt-1 text-[23px] font-semibold tracking-[-0.04em] text-[#243242]">
+              <h1 className="mt-1 text-[23px] font-semibold tracking-[-0.04em] text-ink">
                 {mode === "login"
                   ? "Welcome back"
                   : registerRole === "trainer"
                     ? "Register as a trainer"
                     : "Quick member signup"}
               </h1>
-              <p className="mt-1.5 text-[11px] leading-4 text-[#87909d]">
+              <p className="mt-1.5 text-[11px] leading-4 text-ink-secondary">
                 {mode === "login"
                   ? "Sign in as a gym member or coach to scan in and view your schedule."
                   : registerRole === "trainer"
@@ -425,7 +581,7 @@ function MobileAuthScreen({
               <div
                 role="tablist"
                 aria-label="Account role"
-                className="mb-4 grid grid-cols-2 gap-1.5 rounded-xl bg-[#e8edf0] p-1"
+                className={`mb-4 grid grid-cols-2 gap-1.5 ${ui.segmentedTrack}`}
               >
                 <button
                   type="button"
@@ -435,10 +591,10 @@ function MobileAuthScreen({
                     setRegisterRole("member");
                     setError("");
                   }}
-                  className={`flex min-h-9 items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                  className={`flex min-h-9 items-center justify-center gap-1.5 rounded-xl text-[11px] font-semibold transition-colors ${
                     registerRole === "member"
-                      ? "bg-white text-[#243242] shadow-sm"
-                      : "text-[#6f7b89]"
+                      ? "bg-elevated text-ink"
+                      : "text-ink-secondary hover:text-ink"
                   }`}
                 >
                   <UserRound size={13} aria-hidden="true" />
@@ -452,10 +608,10 @@ function MobileAuthScreen({
                     setRegisterRole("trainer");
                     setError("");
                   }}
-                  className={`flex min-h-9 items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
+                  className={`flex min-h-9 items-center justify-center gap-1.5 rounded-xl text-[11px] font-semibold transition-colors ${
                     registerRole === "trainer"
-                      ? "bg-white text-[#243242] shadow-sm"
-                      : "text-[#6f7b89]"
+                      ? "bg-elevated text-ink"
+                      : "text-ink-secondary hover:text-ink"
                   }`}
                 >
                   <ShieldCheck size={13} aria-hidden="true" />
@@ -468,17 +624,17 @@ function MobileAuthScreen({
               {mode === "register" && registerRole === "trainer" && (
                 <div>
                   <label className="block">
-                    <span className="mb-1 flex items-center justify-between text-[10px] font-medium text-[#526071]">
+                    <span className="mb-1 flex items-center justify-between text-[10px] font-medium text-ink-secondary">
                       <span>Admin trainer invite code</span>
                       {isCheckingCode && (
-                        <span className="text-[9px] text-[#8993a0]">Checking…</span>
+                        <span className="text-[9px] text-ink-muted">Checking…</span>
                       )}
                     </span>
                     <div className="relative">
                       <KeyRound
                         size={14}
                         aria-hidden="true"
-                        className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-[#74808e]"
+                        className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-ink-muted"
                       />
                       <input
                         className={`${fieldClass} ps-9 font-mono uppercase tracking-wider`}
@@ -492,7 +648,7 @@ function MobileAuthScreen({
                     </div>
                   </label>
                   {verifiedInviteGym && (
-                    <p className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-[#eaf6f0] px-2 py-1 text-[10px] font-semibold text-[#278968]">
+                    <p className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-accent-border bg-accent-soft px-2 py-1 text-[10px] font-semibold text-accent-text">
                       <CheckCircle2 size={12} aria-hidden="true" />
                       Verified code · {verifiedInviteGym}
                     </p>
@@ -500,7 +656,7 @@ function MobileAuthScreen({
                   {!verifiedInviteGym && !isCheckingCode && inviteCodeError && (
                     <p
                       role="alert"
-                      className="mt-1.5 rounded-md bg-[#fff1ef] px-2 py-1 text-[10px] font-medium text-[#a9433b]"
+                      className="mt-1.5 rounded-md border border-danger-border bg-danger-soft px-2 py-1 text-[10px] font-medium text-danger-text"
                     >
                       {inviteCodeError}
                     </p>
@@ -511,7 +667,7 @@ function MobileAuthScreen({
               {mode === "register" && (
                 <>
                   <label className="block">
-                    <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                    <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                       Full name
                     </span>
                     <input
@@ -526,7 +682,7 @@ function MobileAuthScreen({
                   </label>
 
                   <label className="block">
-                    <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                    <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                       Phone number
                     </span>
                     <input
@@ -543,7 +699,7 @@ function MobileAuthScreen({
                   {registerRole === "trainer" && (
                     <>
                       <label className="block">
-                        <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                        <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                           Coaching specialty
                         </span>
                         <input
@@ -556,8 +712,8 @@ function MobileAuthScreen({
                         />
                       </label>
                       <label className="block">
-                        <span className="mb-1 block text-[10px] font-medium text-[#526071]">
-                          Email <span className="font-normal text-[#9aa3ae]">(optional)</span>
+                        <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
+                          Email <span className="font-normal text-ink-muted">(optional)</span>
                         </span>
                         <input
                           className={fieldClass}
@@ -575,7 +731,7 @@ function MobileAuthScreen({
 
               {mode === "login" && (
                 <label className="block">
-                  <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                  <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                     Phone or email
                   </span>
                   <input
@@ -590,7 +746,7 @@ function MobileAuthScreen({
               )}
 
               <label className="block">
-                <span className="mb-1 block text-[10px] font-medium text-[#526071]">
+                <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
                   Password
                 </span>
                 <input
@@ -610,17 +766,17 @@ function MobileAuthScreen({
                   <button
                     type="button"
                     onClick={() => setShowOptionalMemberFields((v) => !v)}
-                    className="text-[10px] font-medium text-[#6f7b89] underline decoration-dotted underline-offset-2 hover:text-[#243242]"
+                    className="text-[10px] font-medium text-ink-secondary underline decoration-dotted underline-offset-2 hover:text-ink"
                   >
                     {showOptionalMemberFields
                       ? "Hide optional email"
                       : "+ Add email address (optional)"}
                   </button>
                   {showOptionalMemberFields && (
-                    <div className="mt-2.5 rounded-xl border border-[#e6ebee] bg-white/70 p-3">
+                    <div className={`${ui.cardSubtle} mt-2.5 p-3`}>
                       <label className="block">
-                        <span className="mb-1 block text-[10px] font-medium text-[#526071]">
-                          Email <span className="font-normal text-[#9aa3ae]">(optional)</span>
+                        <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
+                          Email <span className="font-normal text-ink-muted">(optional)</span>
                         </span>
                         <input
                           className={fieldClass}
@@ -641,7 +797,7 @@ function MobileAuthScreen({
                   <button
                     type="button"
                     onClick={() => setShowLoginGymCode((v) => !v)}
-                    className="text-[10px] font-medium text-[#6f7b89] underline decoration-dotted underline-offset-2 hover:text-[#243242]"
+                    className="text-[10px] font-medium text-ink-secondary underline decoration-dotted underline-offset-2 hover:text-ink"
                   >
                     {showLoginGymCode ? "Hide gym code" : "Enter a specific gym code (optional)"}
                   </button>
@@ -661,7 +817,7 @@ function MobileAuthScreen({
               {error && (
                 <p
                   role="alert"
-                  className="rounded-lg border border-[#f1d2cd] bg-[#fff6f4] px-3 py-2.5 text-[10px] text-[#a9433b]"
+                  className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2.5 text-[10px] text-danger-text"
                 >
                   {error}
                 </p>
@@ -670,7 +826,7 @@ function MobileAuthScreen({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#278968] text-[12px] font-semibold text-white hover:bg-[#207858] disabled:cursor-wait disabled:opacity-60"
+                className={`${ui.btnPrimary} min-h-12 w-full text-[12px]`}
               >
                 {isSubmitting && (
                   <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
@@ -685,7 +841,7 @@ function MobileAuthScreen({
               </button>
             </form>
 
-            <p className="mt-5 text-center text-[10px] text-[#778391]">
+            <p className="mt-5 text-center text-[10px] text-ink-secondary">
               {mode === "login" ? "New to the app?" : "Already have an account?"}{" "}
               <button
                 type="button"
@@ -693,7 +849,7 @@ function MobileAuthScreen({
                   setMode(mode === "login" ? "register" : "login");
                   setError("");
                 }}
-                className="font-semibold text-[#278968] hover:text-[#207858]"
+                className="font-semibold text-accent-text hover:underline"
               >
                 {mode === "login" ? "Create an account" : "Sign in"}
               </button>
@@ -711,9 +867,17 @@ export function MemberApp() {
     "checking",
   );
   const [accountRole, setAccountRole] = useState<"member" | "trainer">("member");
+  const { hydrateFromServer: hydrateRestSettings } = useRestTimerSettings();
+  const [serverRestSettings, setServerRestSettings] = useState<RestTimerSettings | null>(
+    null,
+  );
 
   // Member portal state
   const [member, setMember] = useState<MemberProfile | null>(null);
+
+  useEffect(() => {
+    hydrateRestSettings(member?.id ?? null, serverRestSettings);
+  }, [hydrateRestSettings, member?.id, serverRestSettings]);
   const [trainer, setTrainer] = useState<{
     id: string;
     name: string;
@@ -729,8 +893,198 @@ export function MemberApp() {
     UpcomingMemberSession[]
   >([]);
   const [recentVisits, setRecentVisits] = useState<FormattedVisit[]>([]);
-  const [completedSets, setCompletedSets] = useState<string[]>([]);
-  const [progressMemberId, setProgressMemberId] = useState("");
+  const [personalRoutines, setPersonalRoutines] = useState<PersonalRoutine[]>([]);
+  const [archivedRoutines, setArchivedRoutines] = useState<PersonalRoutine[]>([]);
+  const [gymCatalogPlans, setGymCatalogPlans] = useState<GymAssignedWorkoutPlan[]>([]);
+  const [activeRoutineSelection, setActiveRoutineSelection] =
+    useState<ActiveRoutineSelection>({
+      mode: "none",
+      personalRoutineId: null,
+      gymPlanId: null,
+    });
+  const [serverActiveSession, setServerActiveSession] =
+    useState<ActiveWorkoutSession | null>(null);
+  const [activeSessionSummary, setActiveSessionSummary] =
+    useState<ActiveSessionSummary | null>(null);
+  const [workoutEntryNonce, setWorkoutEntryNonce] = useState(0);
+  const [libraryEntryNonce, setLibraryEntryNonce] = useState(0);
+  const [freeWorkoutNonce, setFreeWorkoutNonce] = useState(0);
+  const [progressInitialSection, setProgressInitialSection] = useState<
+    "progress" | "history" | "achievements"
+  >("progress");
+  const [progressSectionNonce, setProgressSectionNonce] = useState(0);
+  const [greetingText, setGreetingText] = useState("Welcome back");
+
+  useEffect(() => {
+    const hr = new Date().getHours();
+    if (hr >= 5 && hr < 12) {
+      setGreetingText("Good morning");
+    } else if (hr >= 12 && hr < 18) {
+      setGreetingText("Good afternoon");
+    } else {
+      setGreetingText("Good evening");
+    }
+  }, []);
+  const [recentWorkoutLogs, setRecentWorkoutLogs] = useState<LoggedWorkoutItem[]>([]);
+  const [exerciseDefaults, setExerciseDefaults] = useState<
+    Record<string, ExerciseDefaultStat>
+  >({});
+  const [exerciseHistory, setExerciseHistory] = useState<ExerciseHistorySummary[]>([]);
+  const [exerciseMediaCatalog, setExerciseMediaCatalog] = useState<
+    Record<string, ExerciseMediaCatalogEntry>
+  >({});
+  const [memberAchievements, setMemberAchievements] =
+    useState<MemberAchievementsSummary | null>(null);
+  const [progressionSettings, setProgressionSettings] =
+    useState<ProgressionRuleSettings>(DEFAULT_PROGRESSION_RULE_SETTINGS);
+  const [workoutProgress, setWorkoutProgress] = useState<MemberProgressSummary>(
+    EMPTY_PROGRESS_SUMMARY,
+  );
+
+  const homeDashboard = useMemo(() => {
+    const todayWeekday: RoutineWeekday =
+      JS_DAY_TO_HOME_WEEKDAY[new Date().getDay()] ?? "Sat";
+
+    const activePersonal =
+      (activeRoutineSelection.personalRoutineId
+        ? personalRoutines.find(
+            (r) => r.id === activeRoutineSelection.personalRoutineId,
+          )
+        : null) ??
+      personalRoutines.find((r) => Boolean(r.isActive)) ??
+      personalRoutines[0] ??
+      null;
+
+    const allGymPlans: GymAssignedWorkoutPlan[] = gymCatalogPlans.length
+      ? gymCatalogPlans
+      : workoutPlan
+        ? [{ ...workoutPlan, isAssignedByGym: true }]
+        : [];
+
+    const selectedGym =
+      activeRoutineSelection.mode === "gym"
+        ? allGymPlans.find((p) => p.id === activeRoutineSelection.gymPlanId) ??
+          (workoutPlan ? { ...workoutPlan, isAssignedByGym: true } : null)
+        : null;
+
+    const personalWeekDays = activePersonal
+      ? normalizeHomeRoutineDays(activePersonal)
+      : [];
+    const todayPersonalEntry =
+      personalWeekDays.find((d) => d.day === todayWeekday) ?? null;
+
+    let nextTrainingLabel = "";
+    if (personalWeekDays.length > 0) {
+      const todayIdx = HOME_WEEKDAYS.indexOf(todayWeekday);
+      for (let offset = 1; offset <= 7; offset += 1) {
+        const candDay = HOME_WEEKDAYS[(todayIdx + offset) % 7];
+        const candObj = personalWeekDays.find((d) => d.day === candDay);
+        if (candObj && !candObj.isRestDay && candObj.exercises.length > 0) {
+          nextTrainingLabel = `${HOME_WEEKDAY_FULL[candDay]} · ${candObj.focusLabel}`;
+          break;
+        }
+      }
+    }
+
+    type TodayCardState =
+      | {
+          kind: "scheduled";
+          workoutTitle: string;
+          routineName: string;
+          exerciseCount: number;
+          estimatedMinutes: number;
+        }
+      | {
+          kind: "rest_day";
+          routineName: string;
+          nextTrainingLabel: string;
+        }
+      | {
+          kind: "unscheduled";
+        };
+
+    let todayWorkout: TodayCardState = { kind: "unscheduled" };
+
+    if (selectedGym && activeRoutineSelection.mode === "gym") {
+      todayWorkout = {
+        kind: "scheduled",
+        workoutTitle: selectedGym.title,
+        routineName: "Gym Routine",
+        exerciseCount: selectedGym.exercises.length,
+        estimatedMinutes: estimateWorkoutMinutes(selectedGym.exercises),
+      };
+    } else if (activePersonal) {
+      if (
+        todayPersonalEntry &&
+        !todayPersonalEntry.isRestDay &&
+        todayPersonalEntry.exercises.length > 0
+      ) {
+        todayWorkout = {
+          kind: "scheduled",
+          workoutTitle:
+            todayPersonalEntry.focusLabel &&
+            todayPersonalEntry.focusLabel !== activePersonal.title
+              ? `${activePersonal.title} · ${todayPersonalEntry.focusLabel}`
+              : activePersonal.title,
+          routineName: activePersonal.title,
+          exerciseCount: todayPersonalEntry.exercises.length,
+          estimatedMinutes: estimateWorkoutMinutes(todayPersonalEntry.exercises),
+        };
+      } else {
+        todayWorkout = {
+          kind: "rest_day",
+          routineName: activePersonal.title,
+          nextTrainingLabel,
+        };
+      }
+    }
+
+    const now = new Date();
+    const fallbackThisMonth = recentWorkoutLogs.filter((log) => {
+      const dt = new Date(log.completedAt);
+      return (
+        !Number.isNaN(dt.getTime()) &&
+        dt.getFullYear() === now.getFullYear() &&
+        dt.getMonth() === now.getMonth() &&
+        log.totalSetsCompleted > 0
+      );
+    }).length;
+
+    const workoutsThisMonth =
+      typeof workoutProgress.workoutsThisMonth === "number"
+        ? workoutProgress.workoutsThisMonth
+        : fallbackThisMonth;
+
+    const totalPrs =
+      typeof workoutProgress.totalPersonalRecords === "number"
+        ? workoutProgress.totalPersonalRecords
+        : workoutProgress.personalRecords.length;
+
+    const latestWorkout =
+      recentWorkoutLogs.find((l) => l.totalSetsCompleted > 0) ?? null;
+
+    return {
+      todayWeekday,
+      activePersonal,
+      selectedGym,
+      personalWeekDays,
+      todayWorkout,
+      workoutsThisMonth,
+      totalPrs,
+      latestWorkout,
+    };
+  }, [
+    activeRoutineSelection.gymPlanId,
+    activeRoutineSelection.mode,
+    activeRoutineSelection.personalRoutineId,
+    gymCatalogPlans,
+    personalRoutines,
+    recentWorkoutLogs,
+    workoutPlan,
+    workoutProgress.personalRecords.length,
+    workoutProgress.totalPersonalRecords,
+    workoutProgress.workoutsThisMonth,
+  ]);
   const [pendingRequest, setPendingRequest] = useState<PendingSubscriptionInfo | null>(null);
   const [connectedGym, setConnectedGym] = useState<ConnectedGymInfo | null>(null);
 
@@ -792,6 +1146,55 @@ export function MemberApp() {
     return true;
   }, []);
 
+  const loadMemberWorkouts = useCallback(async () => {
+    try {
+      const response = await mobileFetch("/api/member-workouts", {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const payload = await readMobileJson<{
+        personalRoutines?: PersonalRoutine[];
+        archivedRoutines?: PersonalRoutine[];
+        gymCatalogPlans?: GymAssignedWorkoutPlan[];
+        activeSelection?: ActiveRoutineSelection;
+        restSettings?: RestTimerSettings;
+        progressionSettings?: ProgressionRuleSettings;
+        activeWorkoutSession?: ActiveWorkoutSession | null;
+        recentLogs?: LoggedWorkoutItem[];
+        exerciseDefaults?: Record<string, ExerciseDefaultStat>;
+        exerciseHistory?: ExerciseHistorySummary[];
+        exerciseMediaCatalog?: Record<string, ExerciseMediaCatalogEntry>;
+        achievements?: MemberAchievementsSummary;
+        progress?: MemberProgressSummary;
+      }>(response, "Unable to load workout routines.");
+      setPersonalRoutines(payload.personalRoutines ?? []);
+      setArchivedRoutines(payload.archivedRoutines ?? []);
+      setGymCatalogPlans(payload.gymCatalogPlans ?? []);
+      setActiveRoutineSelection(
+        payload.activeSelection ?? {
+          mode: "none",
+          personalRoutineId: null,
+          gymPlanId: null,
+        },
+      );
+      if (payload.restSettings) {
+        setServerRestSettings(payload.restSettings);
+      }
+      if (payload.progressionSettings) {
+        setProgressionSettings(payload.progressionSettings);
+      }
+      setServerActiveSession(payload.activeWorkoutSession ?? null);
+      setRecentWorkoutLogs(payload.recentLogs ?? []);
+      setExerciseDefaults(payload.exerciseDefaults ?? {});
+      setExerciseHistory(payload.exerciseHistory ?? []);
+      setExerciseMediaCatalog(payload.exerciseMediaCatalog ?? {});
+      setMemberAchievements(payload.achievements ?? null);
+      setWorkoutProgress(payload.progress ?? EMPTY_PROGRESS_SUMMARY);
+    } catch {
+      // Non-blocking: digital pass & check-in remain functional if workout analytics fail temporarily.
+    }
+  }, []);
+
   const loadMobilePortal = useCallback(async (): Promise<boolean> => {
     setDataError("");
     try {
@@ -806,6 +1209,12 @@ export function MemberApp() {
         setWorkoutPlan(null);
         setPendingWorkoutPlan(null);
         setRecentVisits([]);
+        setPersonalRoutines([]);
+        setRecentWorkoutLogs([]);
+        setExerciseDefaults({});
+        setExerciseHistory([]);
+        setProgressionSettings(DEFAULT_PROGRESSION_RULE_SETTINGS);
+        setWorkoutProgress(EMPTY_PROGRESS_SUMMARY);
         setAuthStatus("unauthenticated");
         return false;
       }
@@ -842,6 +1251,9 @@ export function MemberApp() {
           formatVisit(visit.checkInTime, visit.id, visit.source),
         ),
       );
+      if (isEnrolled) {
+        void loadMemberWorkouts();
+      }
       setAuthStatus("authenticated");
       return true;
     } catch (error) {
@@ -854,7 +1266,7 @@ export function MemberApp() {
       });
       return false;
     }
-  }, [loadTrainerPortal]);
+  }, [loadMemberWorkouts, loadTrainerPortal]);
 
   useEffect(() => {
     void loadMobilePortal();
@@ -930,34 +1342,6 @@ export function MemberApp() {
       setIsRespondingWorkout(false);
     }
   }
-
-  const currentMemberId = member?.id ?? "";
-
-  useEffect(() => {
-    if (!currentMemberId) {
-      setCompletedSets([]);
-      setProgressMemberId("");
-      return;
-    }
-    try {
-      const savedProgress = safeLocalGet(
-        `gymos-workout-progress:${currentMemberId}`,
-      );
-      setCompletedSets(savedProgress ? (JSON.parse(savedProgress) as string[]) : []);
-    } catch {
-      safeLocalRemove(`gymos-workout-progress:${currentMemberId}`);
-      setCompletedSets([]);
-    }
-    setProgressMemberId(currentMemberId);
-  }, [currentMemberId]);
-
-  useEffect(() => {
-    if (!currentMemberId || progressMemberId !== currentMemberId) return;
-    safeLocalSet(
-      `gymos-workout-progress:${currentMemberId}`,
-      JSON.stringify(completedSets),
-    );
-  }, [completedSets, currentMemberId, progressMemberId]);
 
   const stopScanner = useCallback(async () => {
     const activeScanner = scannerRef.current;
@@ -1202,6 +1586,20 @@ export function MemberApp() {
       setWorkoutPlan(null);
       setUpcomingMemberSessions([]);
       setRecentVisits([]);
+      setPersonalRoutines([]);
+      setArchivedRoutines([]);
+      setGymCatalogPlans([]);
+      setActiveRoutineSelection({ mode: "none", personalRoutineId: null, gymPlanId: null });
+      setServerActiveSession(null);
+      setActiveSessionSummary(null);
+      setWorkoutEntryNonce(0);
+      setLibraryEntryNonce(0);
+      setRecentWorkoutLogs([]);
+      setExerciseDefaults({});
+      setExerciseHistory([]);
+      setExerciseMediaCatalog({});
+      setMemberAchievements(null);
+      setWorkoutProgress(EMPTY_PROGRESS_SUMMARY);
       setTrainees([]);
       setTrainerSessions([]);
       setTrainerVisits([]);
@@ -1228,31 +1626,25 @@ export function MemberApp() {
     setManualQrInput("");
   }
 
-  function toggleSet(key: string) {
-    setCompletedSets((current) =>
-      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
-    );
-  }
-
   if (authStatus === "checking") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
+      <main className={ui.pageCanvas}>
         <section
           aria-label="Loading GymOS mobile app"
-          className="flex h-[100dvh] w-full max-w-[430px] flex-col items-center justify-center gap-3 bg-[#f7f8fa] px-6 text-center shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
+          className={`${ui.appFrame} items-center justify-center gap-3 px-6 text-center`}
         >
           {dataError ? (
-            <div className="w-full max-w-[310px] space-y-3 rounded-2xl border border-[#e9edf1] bg-white p-5">
-              <p className="text-[13px] font-semibold text-[#243242]">
+            <div className={`${ui.card} w-full max-w-[310px] space-y-3 p-5`}>
+              <p className="text-[13px] font-semibold text-ink">
                 Connection interrupted
               </p>
-              <p role="alert" className="text-[11px] leading-4 text-[#687585]">
+              <p role="alert" className="text-[11px] leading-4 text-ink-secondary">
                 {dataError}
               </p>
               <button
                 type="button"
                 onClick={() => void loadMobilePortal()}
-                className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-[#278968] px-4 text-[11px] font-semibold text-white hover:bg-[#207858]"
+                className={`${ui.btnPrimary} min-h-10 w-full px-4 text-[11px]`}
               >
                 <RotateCcw size={13} aria-hidden="true" />
                 Retry connection
@@ -1260,15 +1652,17 @@ export function MemberApp() {
               <button
                 type="button"
                 onClick={() => void handleLogout()}
-                className="inline-flex min-h-9 w-full items-center justify-center rounded-xl border border-[#e3e8ec] bg-white px-4 text-[11px] font-medium text-[#687585] hover:bg-slate-50"
+                className={`${ui.btnSecondary} min-h-9 w-full px-4 text-[11px]`}
               >
                 Back to sign in
               </button>
             </div>
           ) : (
             <>
-              <LoaderCircle size={28} className="animate-spin text-[#278968]" aria-hidden="true" />
-              <p className="text-[12px] font-medium text-[#687585]">Loading your GymOS pass…</p>
+              <LoaderCircle size={28} className="animate-spin text-accent-text" aria-hidden="true" />
+              <p className="text-[12px] font-medium text-ink-secondary">
+                Loading your GymOS pass…
+              </p>
             </>
           )}
         </section>
@@ -1294,19 +1688,19 @@ export function MemberApp() {
       : member?.name.split(" ")[0] ?? "member";
 
   const qrScannerModal = isScannerOpen && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101b26]/75 p-4 backdrop-blur-sm">
+    <div className={ui.modalBackdrop}>
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="scanner-title"
-        className="w-full max-w-[390px] overflow-hidden rounded-[24px] bg-white shadow-[0_24px_80px_rgba(10,18,27,0.35)]"
+        className={`${ui.modalCard} max-w-[390px] overflow-hidden`}
       >
-        <header className="flex items-center justify-between border-b border-[#edf0f2] px-5 py-4">
+        <header className="flex items-center justify-between border-b border-divider px-5 py-4">
           <div>
-            <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#83908d]">
+            <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
               {scannerPurpose === "join-gym" ? "Connect to Gym" : "GymOS Check-in"}
             </p>
-            <h2 id="scanner-title" className="mt-0.5 text-[14px] font-semibold text-[#273445]">
+            <h2 id="scanner-title" className="mt-0.5 text-[14px] font-semibold text-ink">
               {checkInSuccess
                 ? "Check-in confirmed"
                 : scannerPurpose === "join-gym"
@@ -1318,7 +1712,7 @@ export function MemberApp() {
             type="button"
             aria-label="Close scanner"
             onClick={() => setIsScannerOpen(false)}
-            className="grid size-9 place-items-center rounded-lg text-[#788391] hover:bg-[#f4f6f7]"
+            className={`${ui.btnGhost} size-9`}
           >
             <X size={18} aria-hidden="true" />
           </button>
@@ -1326,39 +1720,71 @@ export function MemberApp() {
 
         <div className="p-5">
           {checkInSuccess ? (
-            <div className="py-4 text-center">
-              <span className="check-in-success-mark mx-auto grid size-20 place-items-center rounded-full bg-[#eaf6f0] text-[#278968]">
-                <CheckCircle2 size={42} strokeWidth={1.7} aria-hidden="true" />
+            <div className="py-3 text-center">
+              <span className="check-in-success-mark mx-auto grid size-18 place-items-center rounded-full border border-accent-border bg-accent-soft text-accent-text">
+                <CheckCircle2 size={38} strokeWidth={1.7} aria-hidden="true" />
               </span>
-              <p className="mt-5 text-[19px] font-semibold text-[#243242]">
+              <p className="mt-4 text-[18px] font-semibold text-ink">
                 You&apos;re checked in, {activeFirstName}!
               </p>
-              <p className="mt-1.5 text-[12px] text-[#74808e]">
+              <p className="mt-1 text-[11px] text-ink-secondary">
                 {lastCheckInTime} · {activeGymName}
               </p>
-              <div className="mt-5 rounded-xl border border-[#dceee4] bg-[#f2faf5] px-4 py-3 text-left">
-                <p className="text-[9px] font-semibold uppercase tracking-wide text-[#6b8f7f]">
-                  {accountRole === "trainer"
-                    ? "Coach floor check-in · Verified"
-                    : `Membership status · ${member?.status ?? "Active"}`}
-                </p>
-                <p className="mt-1 text-[13px] font-semibold text-[#278968]">
-                  {accountRole === "trainer"
-                    ? `${trainerProfile?.specialty ?? "Active Trainer"}`
-                    : `Valid through ${formatMemberDate(member?.expiryDate ?? null)}`}
-                </p>
-              </div>
+
+              {accountRole === "member" ? (
+                <div className="mt-4 rounded-2xl border border-accent-border bg-accent-soft p-4 text-start">
+                  <div className="flex items-center gap-2">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-accent text-on-accent">
+                      <Dumbbell size={16} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[14px] font-semibold text-ink">
+                        Ready to train?
+                      </p>
+                      <p className="truncate text-[10px] text-ink-secondary">
+                        {activeSessionSummary
+                          ? `In progress: ${activeSessionSummary.title}`
+                          : "Jump straight into today's scheduled workout"}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsScannerOpen(false);
+                      setActiveTab("Workout");
+                      setWorkoutEntryNonce((n) => n + 1);
+                    }}
+                    className={`${ui.btnPrimary} mt-3.5 min-h-11 w-full text-[12px]`}
+                  >
+                    <Play size={14} aria-hidden="true" />
+                    {activeSessionSummary ? "Resume Workout" : "Start Workout"}
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-xl border border-accent-border bg-accent-soft px-4 py-3 text-left">
+                  <p className="text-[9px] font-semibold uppercase tracking-wide text-ink-secondary">
+                    Coach floor check-in · Verified
+                  </p>
+                  <p className="mt-1 text-[13px] font-semibold text-accent-text">
+                    {trainerProfile?.specialty ?? "Active Trainer"}
+                  </p>
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={() => setIsScannerOpen(false)}
-                className="mt-5 min-h-11 w-full rounded-xl bg-[#278968] text-[12px] font-semibold text-white hover:bg-[#207858]"
+                className={`${
+                  accountRole === "member" ? ui.btnSecondary : ui.btnPrimary
+                } mt-3 min-h-10 w-full text-[11px]`}
               >
-                Done
+                {accountRole === "member" ? "Not now" : "Done"}
               </button>
             </div>
           ) : (
             <>
-              <div className="relative mx-auto aspect-square w-full max-w-[270px] overflow-hidden rounded-2xl bg-[#172433]">
+              <div className="relative mx-auto aspect-square w-full max-w-[270px] overflow-hidden rounded-2xl border border-line-strong bg-camera-well">
                 <div
                   id="gymos-qr-reader"
                   className="h-full w-full [&_video]:h-full [&_video]:w-full [&_video]:object-cover"
@@ -1366,14 +1792,14 @@ export function MemberApp() {
                 {!cameraActive && (
                   <div className="pointer-events-none absolute inset-0 grid place-items-center">
                     <div
-                      className="absolute inset-0 opacity-30"
+                      className="absolute inset-0 opacity-25"
                       style={{
                         backgroundImage:
-                          "linear-gradient(rgba(111,194,158,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(111,194,158,.18) 1px, transparent 1px)",
+                          "linear-gradient(rgba(92,211,170,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(92,211,170,.18) 1px, transparent 1px)",
                         backgroundSize: "24px 24px",
                       }}
                     />
-                    <div className="relative grid size-[68%] place-items-center rounded-[28px] border-2 border-[#8bdbb7]">
+                    <div className="relative grid size-[68%] place-items-center rounded-[28px] border-2 border-camera-reticle">
                       <span className="absolute -left-1 -top-1 size-5 rounded-tl-md border-l-[3px] border-t-[3px] border-white" />
                       <span className="absolute -right-1 -top-1 size-5 rounded-tr-md border-r-[3px] border-t-[3px] border-white" />
                       <span className="absolute -bottom-1 -left-1 size-5 rounded-bl-md border-b-[3px] border-l-[3px] border-white" />
@@ -1381,17 +1807,17 @@ export function MemberApp() {
                       {isCameraStarting ? (
                         <LoaderCircle
                           size={34}
-                          className="animate-spin text-[#8bdbb7]"
+                          className="animate-spin text-camera-reticle"
                           aria-hidden="true"
                         />
                       ) : (
-                        <Camera size={34} className="text-[#8bdbb7]" aria-hidden="true" />
+                        <Camera size={34} className="text-camera-reticle" aria-hidden="true" />
                       )}
-                      <span className="scanner-sweep absolute left-2 right-2 h-0.5 bg-[#a5f2ce] shadow-[0_0_14px_3px_rgba(117,229,177,.55)]" />
+                      <span className="scanner-sweep absolute left-2 right-2 h-0.5 bg-camera-reticle" />
                     </div>
                   </div>
                 )}
-                <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-950/60 px-3 py-1 text-[9px] font-medium text-white/90">
+                <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/70 px-3 py-1 text-[9px] font-medium text-white/90">
                   {isCameraStarting
                     ? "Starting camera…"
                     : cameraActive
@@ -1403,7 +1829,7 @@ export function MemberApp() {
               </div>
 
               {cameraNotice && (
-                <p className="mt-3 text-center text-[10px] leading-4 text-[#74808e]">
+                <p className="mt-3 text-center text-[10px] leading-4 text-ink-secondary">
                   {cameraNotice}
                 </p>
               )}
@@ -1411,7 +1837,7 @@ export function MemberApp() {
               {checkInError && (
                 <p
                   role="alert"
-                  className="mt-3 rounded-lg bg-[#fff1ef] px-3 py-2 text-[11px] text-[#a9433b]"
+                  className="mt-3 rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-[11px] text-danger-text"
                 >
                   {checkInError}
                 </p>
@@ -1429,12 +1855,12 @@ export function MemberApp() {
                   onChange={(event) => setManualQrInput(event.target.value)}
                   placeholder="Enter reception gym code…"
                   aria-label="Gym code"
-                  className="min-h-10 min-w-0 flex-1 rounded-xl border border-[#e3e8ec] px-3 text-[11px] text-[#344052] outline-none placeholder:text-[#a3acb7] focus:border-[#55b994]"
+                  className={`${ui.inputCompact} min-h-10 min-w-0 flex-1 rounded-xl px-3`}
                 />
                 <button
                   type="submit"
                   disabled={isCheckingIn || !manualQrInput.trim()}
-                  className="min-h-10 shrink-0 rounded-xl bg-[#278968] px-3.5 text-[11px] font-semibold text-white hover:bg-[#207858] disabled:opacity-50"
+                  className={`${ui.btnPrimary} min-h-10 shrink-0 px-3.5 text-[11px]`}
                 >
                   {isCheckingIn
                     ? "Verifying…"
@@ -1499,33 +1925,13 @@ export function MemberApp() {
   // ---------------------------------------------------------
   // MEMBER MOBILE VIEW (Enrolled in a gym plan)
   // ---------------------------------------------------------
-  const exercises = workoutPlan?.exercises ?? [];
-  const totalSets = exercises.reduce(
-    (total, exercise) => total + Math.max(1, Number.parseInt(exercise.sets, 10) || 1),
-    0,
-  );
-  const completedSetCount = exercises.reduce((total, exercise) => {
-    const setCount = Math.max(1, Number.parseInt(exercise.sets, 10) || 1);
-    return (
-      total +
-      Array.from(
-        { length: setCount },
-        (_, index) => `${workoutPlan?.id}:${exercise.id}:${index + 1}`,
-      ).filter((key) => completedSets.includes(key)).length
-    );
-  }, 0);
-  const completionPercent = totalSets ? Math.round((completedSetCount / totalSets) * 100) : 0;
-
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#eef2f5] px-0 py-0 sm:px-6 sm:py-8">
-      <section
-        aria-label="GymOS member app"
-        className="flex h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-[#f7f8fa] shadow-[0_20px_50px_rgba(24,33,47,0.12)] sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-[#dfe5ea]"
-      >
-        <header className="flex min-h-[72px] items-center justify-between border-b border-[#edf0f2] bg-white px-5 pt-[max(env(safe-area-inset-top),8px)]">
+    <main className={ui.pageCanvas}>
+      <section aria-label="GymOS member app" className={ui.appFrame}>
+        <header className={ui.appHeader}>
           <div className="flex items-center gap-3">
             <span
-              className="grid size-9 place-items-center rounded-xl bg-[#45b58b] text-[14px] font-bold text-white"
+              className="grid size-9 place-items-center rounded-xl bg-accent text-[14px] font-bold text-on-accent"
               aria-hidden="true"
             >
               G
@@ -1533,16 +1939,17 @@ export function MemberApp() {
             <div>
               <p
                 data-no-translate="true"
-                className="text-[13px] font-semibold tracking-[-0.03em] text-[#243242]"
+                className="text-[13px] font-semibold tracking-[-0.03em] text-ink"
               >
-                Gym<span className="text-[#2d9d78]">OS</span>
+                Gym<span className="text-accent-text">OS</span>
               </p>
-              <p className="max-w-[140px] truncate text-[9px] uppercase tracking-wide text-[#8993a0]">
+              <p className="max-w-[140px] truncate text-[9px] uppercase tracking-wide text-ink-muted">
                 {member?.gymName ?? "Member App"}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <ThemeHeaderSwitch />
             <LanguageSwitch />
             <button
               type="button"
@@ -1550,7 +1957,7 @@ export function MemberApp() {
               disabled={isLoggingOut}
               aria-label="Sign out"
               title="Sign out"
-              className="grid size-9 place-items-center rounded-lg text-[#74808e] hover:bg-[#f3f5f6] hover:text-[#a64141]"
+              className={`${ui.btnGhost} size-9 hover:text-danger-text`}
             >
               <LogOut size={15} aria-hidden="true" />
             </button>
@@ -1560,18 +1967,18 @@ export function MemberApp() {
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-5">
           <div className="mb-5 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[11px] text-[#8993a0]">Welcome back</p>
-              <h1 className="mt-0.5 truncate text-[21px] font-semibold tracking-[-0.045em] text-[#243242]">
+              <p className="text-[11px] text-ink-secondary">{greetingText}</p>
+              <h1 className="mt-0.5 truncate text-[21px] font-semibold tracking-[-0.045em] text-ink">
                 {member?.name ?? "Member"}
               </h1>
             </div>
             <span
-              className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+              className={`shrink-0 ${
                 member?.status === "Active"
-                  ? "bg-[#eaf6f0] text-[#278968]"
+                  ? ui.badgeAccent
                   : member?.status === "Unpaid"
-                    ? "bg-[#fff4e8] text-[#bd7838]"
-                    : "bg-[#fff0ee] text-[#c4544c]"
+                    ? ui.badgeWarning
+                    : ui.badgeDanger
               }`}
             >
               {member?.status ?? "Unknown"}
@@ -1581,7 +1988,7 @@ export function MemberApp() {
           {dataError && (
             <p
               role="alert"
-              className="mb-4 rounded-lg bg-[#fff1ef] px-3 py-2 text-[10px] text-[#a9433b]"
+              className="mb-4 rounded-xl border border-danger-border bg-danger-soft px-3 py-2 text-[10px] text-danger-text"
             >
               {dataError}
             </p>
@@ -1590,7 +1997,7 @@ export function MemberApp() {
           {workoutDecisionNotice && !pendingWorkoutPlan && (
             <div
               role="status"
-              className="mb-4 flex items-center justify-between gap-2 rounded-xl border border-[#cde9dc] bg-[#eaf6f0] px-3.5 py-2.5 text-[11px] font-medium text-[#237e5f]"
+              className="mb-4 flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3.5 py-2.5 text-[11px] font-medium text-accent-text"
             >
               <span>{workoutDecisionNotice}</span>
               <button
@@ -1607,48 +2014,48 @@ export function MemberApp() {
             <section
               role="region"
               aria-label="Workout routine verification"
-              className="mb-4 rounded-2xl border border-[#cfe5d9] bg-white p-4 shadow-[0_8px_24px_rgba(39,137,104,0.08)]"
+              className="mb-4 rounded-2xl border border-accent-border bg-surface p-4"
             >
               <div className="flex items-start gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#eaf6f0] text-[#278968]">
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
                   <Dumbbell size={17} aria-hidden="true" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#278968]">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-accent-text">
                     Workout routine verification
                   </p>
-                  <p className="mt-1 text-[13px] font-semibold text-[#243242]">
+                  <p className="mt-1 text-[13px] font-semibold text-ink">
                     Do you want to accept this workout routine change?
                   </p>
-                  <p className="mt-1 text-[11px] text-[#687585]">
-                    <span className="font-semibold text-[#354153]">
+                  <p className="mt-1 text-[11px] text-ink-secondary">
+                    <span className="font-semibold text-ink">
                       {pendingWorkoutPlan.title}
                     </span>{" "}
                     · {pendingWorkoutPlan.targetGoal} ({pendingWorkoutPlan.exercises.length}{" "}
                     {pendingWorkoutPlan.exercises.length === 1 ? "exercise" : "exercises"})
                   </p>
-                  <p className="mt-0.5 text-[10px] text-[#8993a0]">
+                  <p className="mt-0.5 text-[10px] text-ink-muted">
                     Sent by {pendingWorkoutPlan.assignedBy}
                   </p>
                 </div>
               </div>
 
               {pendingWorkoutPlan.exercises.length > 0 && (
-                <div className="mt-3 rounded-xl bg-[#f7f9fa] p-2.5">
+                <div className={`${ui.cardSubtle} mt-3 p-2.5`}>
                   <ul className="space-y-1">
                     {pendingWorkoutPlan.exercises.slice(0, 4).map((exercise) => (
                       <li
                         key={exercise.id}
-                        className="flex items-center justify-between gap-2 text-[10px] text-[#526071]"
+                        className="flex items-center justify-between gap-2 text-[10px] text-ink-secondary"
                       >
-                        <span className="truncate font-medium">{exercise.name}</span>
-                        <span className="shrink-0 text-[#8993a0]">
+                        <span className="truncate font-medium text-ink">{exercise.name}</span>
+                        <span className="shrink-0 text-ink-muted">
                           {exercise.sets} × {exercise.reps}
                         </span>
                       </li>
                     ))}
                     {pendingWorkoutPlan.exercises.length > 4 && (
-                      <li className="text-[10px] text-[#8993a0]">
+                      <li className="text-[10px] text-ink-muted">
                         +{pendingWorkoutPlan.exercises.length - 4} more exercises
                       </li>
                     )}
@@ -1661,7 +2068,7 @@ export function MemberApp() {
                   type="button"
                   disabled={isRespondingWorkout}
                   onClick={() => void respondToPendingWorkout("decline")}
-                  className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border border-[#e3e8ec] bg-white px-3 text-[11px] font-semibold text-[#596575] hover:bg-[#f7f9fa] disabled:opacity-50"
+                  className={`${ui.btnSecondary} min-h-10 px-3 text-[11px]`}
                 >
                   <X size={14} aria-hidden="true" />
                   Decline
@@ -1670,7 +2077,7 @@ export function MemberApp() {
                   type="button"
                   disabled={isRespondingWorkout}
                   onClick={() => void respondToPendingWorkout("accept")}
-                  className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-[#278968] px-3 text-[11px] font-semibold text-white hover:bg-[#207858] disabled:opacity-60"
+                  className={`${ui.btnPrimary} min-h-10 px-3 text-[11px]`}
                 >
                   <Check size={14} aria-hidden="true" />
                   {isRespondingWorkout ? "Saving…" : "Accept Routine"}
@@ -1681,82 +2088,519 @@ export function MemberApp() {
 
           {activeTab === "Pass" && (
             <div className="space-y-4">
+              {/* 1. TODAY'S WORKOUT / REST DAY HERO (Prioritized Start Workout) */}
+              <section
+                aria-label="Today's workout"
+                className={`${ui.cardElevated} p-4`}
+              >
+                {activeSessionSummary ? (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={ui.badgeAccent}>
+                        <Play size={11} aria-hidden="true" />
+                        Workout in progress
+                      </span>
+                      <span className="text-[10px] font-semibold text-ink-secondary">
+                        {`${activeSessionSummary.completedSets}/${activeSessionSummary.totalSets} sets done`}
+                      </span>
+                    </div>
+                    <h2 className="mt-2 truncate text-[18px] font-semibold tracking-[-0.03em] text-ink">
+                      {activeSessionSummary.title}
+                    </h2>
+                    <p className="mt-1 text-[11px] text-ink-secondary">
+                      Your active workout session is saved and ready to continue.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("Workout")}
+                      className={`${ui.btnPrimary} mt-3.5 flex min-h-12 w-full rounded-xl px-4 text-[13px]`}
+                    >
+                      <Play size={16} aria-hidden="true" />
+                      Resume Workout
+                    </button>
+                  </div>
+                ) : homeDashboard.todayWorkout.kind === "scheduled" ? (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={ui.badgeAccent}>
+                        <Dumbbell size={11} aria-hidden="true" />
+                        Today&apos;s Workout
+                      </span>
+                      <span className="text-[10px] font-semibold text-ink-muted">
+                        {HOME_WEEKDAY_FULL[homeDashboard.todayWeekday]}
+                      </span>
+                    </div>
+                    <h2 className="mt-2 truncate text-[18px] font-semibold tracking-[-0.03em] text-ink">
+                      {homeDashboard.todayWorkout.workoutTitle}
+                    </h2>
+                    <p className="mt-1 text-[11px] text-ink-secondary">
+                      {`${homeDashboard.todayWorkout.exerciseCount} exercises · ~${homeDashboard.todayWorkout.estimatedMinutes} min`}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWorkoutEntryNonce((n) => n + 1);
+                        setActiveTab("Workout");
+                      }}
+                      className={`${ui.btnPrimary} mt-3.5 flex min-h-12 w-full rounded-xl px-4 text-[13px]`}
+                    >
+                      <Play size={16} aria-hidden="true" />
+                      Start Workout
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFreeWorkoutNonce((n) => n + 1);
+                        setActiveTab("Workout");
+                      }}
+                      className="mt-2 inline-flex w-full items-center justify-center gap-1 py-1 text-[10px] font-semibold text-ink-secondary hover:text-ink"
+                    >
+                      <Zap size={12} className="text-accent-text" aria-hidden="true" />
+                      Start Free Workout
+                    </button>
+                  </div>
+                ) : homeDashboard.todayWorkout.kind === "rest_day" ? (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={ui.badgeNeutral}>
+                        <Moon size={11} aria-hidden="true" />
+                        Rest Day
+                      </span>
+                      <span className="text-[10px] font-semibold text-ink-muted">
+                        {HOME_WEEKDAY_FULL[homeDashboard.todayWeekday]}
+                      </span>
+                    </div>
+                    <h2 className="mt-2 text-[17px] font-semibold tracking-[-0.03em] text-ink">
+                      Scheduled rest &amp; recovery day
+                    </h2>
+                    <p className="mt-1 text-[11px] text-ink-secondary">
+                      {homeDashboard.todayWorkout.nextTrainingLabel
+                        ? `Next workout: ${homeDashboard.todayWorkout.nextTrainingLabel}`
+                        : `Active routine: ${homeDashboard.todayWorkout.routineName}`}
+                    </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFreeWorkoutNonce((n) => n + 1);
+                          setActiveTab("Workout");
+                        }}
+                        className={`${ui.btnSecondary} flex min-h-10 rounded-xl px-3 text-[11px]`}
+                      >
+                        <Zap size={13} className="text-accent-text" aria-hidden="true" />
+                        Start Free Workout
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("Workout")}
+                        className={`${ui.btnSecondary} flex min-h-10 rounded-xl px-3 text-[11px]`}
+                      >
+                        Open Workouts
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={ui.badgeNeutral}>
+                        <Dumbbell size={11} aria-hidden="true" />
+                        Today&apos;s Workout
+                      </span>
+                      <span className="text-[10px] font-semibold text-ink-muted">
+                        {HOME_WEEKDAY_FULL[homeDashboard.todayWeekday]}
+                      </span>
+                    </div>
+                    <h2 className="mt-2 text-[17px] font-semibold tracking-[-0.03em] text-ink">
+                      No workout scheduled today
+                    </h2>
+                    <p className="mt-1 text-[11px] text-ink-secondary">
+                      Create a personal routine or start a free workout anytime.
+                    </p>
+                    <div className="mt-3.5 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFreeWorkoutNonce((n) => n + 1);
+                          setActiveTab("Workout");
+                        }}
+                        className={`${ui.btnPrimary} flex min-h-11 rounded-xl px-3 text-[11px]`}
+                      >
+                        <Play size={14} aria-hidden="true" />
+                        Start Free Workout
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("Workout")}
+                        className={`${ui.btnSecondary} flex min-h-11 rounded-xl px-3 text-[11px]`}
+                      >
+                        My Routines
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* 2. QUICK ACCESS (My Routines, Workout History, Exercise Library, Progress) */}
+              <section aria-label="Quick access" className="space-y-2">
+                <p className="px-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
+                  Quick Access
+                </p>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("Workout")}
+                    className={`${ui.cardInteractive} flex items-center gap-2.5 p-3 text-start`}
+                  >
+                    <span className="grid size-8 shrink-0 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
+                      <Dumbbell size={15} aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[11px] font-semibold text-ink">
+                        My Routines
+                      </span>
+                      <span className="block truncate text-[9px] text-ink-secondary">
+                        {`${personalRoutines.length} saved`}
+                      </span>
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProgressInitialSection("history");
+                      setProgressSectionNonce((n) => n + 1);
+                      setActiveTab("Progress");
+                    }}
+                    className={`${ui.cardInteractive} flex items-center gap-2.5 p-3 text-start`}
+                  >
+                    <span className="grid size-8 shrink-0 place-items-center rounded-xl border border-line bg-subtle text-ink-secondary">
+                      <History size={15} aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[11px] font-semibold text-ink">
+                        Workout History
+                      </span>
+                      <span className="block truncate text-[9px] text-ink-secondary">
+                        {`${workoutProgress.totalWorkouts} sessions`}
+                      </span>
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLibraryEntryNonce((n) => n + 1);
+                      setActiveTab("Workout");
+                    }}
+                    className={`${ui.cardInteractive} flex items-center gap-2.5 p-3 text-start`}
+                  >
+                    <span className="grid size-8 shrink-0 place-items-center rounded-xl border border-line bg-subtle text-ink-secondary">
+                      <BookOpen size={15} aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[11px] font-semibold text-ink">
+                        Exercise Library
+                      </span>
+                      <span className="block truncate text-[9px] text-ink-secondary">
+                        Demos &amp; form cues
+                      </span>
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProgressInitialSection("progress");
+                      setProgressSectionNonce((n) => n + 1);
+                      setActiveTab("Progress");
+                    }}
+                    className={`${ui.cardInteractive} flex items-center gap-2.5 p-3 text-start`}
+                  >
+                    <span className="grid size-8 shrink-0 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
+                      <TrendingUp size={15} aria-hidden="true" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[11px] font-semibold text-ink">
+                        Progress
+                      </span>
+                      <span className="block truncate text-[9px] text-ink-secondary">
+                        Charts &amp; PRs
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              </section>
+
+              {/* 3. PROGRESS SNAPSHOT (Real member stats: Month, Streak, Total, PRs) */}
+              <section
+                aria-label="Progress summary"
+                className={`${ui.card} p-4`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-ink">Progress</p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProgressInitialSection("achievements");
+                        setProgressSectionNonce((n) => n + 1);
+                        setActiveTab("Progress");
+                      }}
+                      className="text-[10px] font-semibold text-ink-secondary hover:text-ink"
+                    >
+                      Achievements
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProgressInitialSection("progress");
+                        setProgressSectionNonce((n) => n + 1);
+                        setActiveTab("Progress");
+                      }}
+                      className="text-[10px] font-semibold text-accent-text hover:underline"
+                    >
+                      View all
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                  <div className={`${ui.cardSubtle} p-2.5 text-center`}>
+                    <p
+                      data-no-translate="true"
+                      className="text-[16px] font-bold tracking-[-0.03em] text-ink"
+                    >
+                      {homeDashboard.workoutsThisMonth}
+                    </p>
+                    <p className="mt-0.5 text-[9px] text-ink-secondary">This month</p>
+                  </div>
+                  <div className={`${ui.cardSubtle} p-2.5 text-center`}>
+                    <p
+                      data-no-translate="true"
+                      className="text-[16px] font-bold tracking-[-0.03em] text-accent-text"
+                    >
+                      {`${workoutProgress.currentStreakDays}d`}
+                    </p>
+                    <p className="mt-0.5 text-[9px] text-ink-secondary">Streak</p>
+                  </div>
+                  <div className={`${ui.cardSubtle} p-2.5 text-center`}>
+                    <p
+                      data-no-translate="true"
+                      className="text-[16px] font-bold tracking-[-0.03em] text-ink"
+                    >
+                      {workoutProgress.totalWorkouts}
+                    </p>
+                    <p className="mt-0.5 text-[9px] text-ink-secondary">Workouts</p>
+                  </div>
+                  <div className={`${ui.cardSubtle} p-2.5 text-center`}>
+                    <p
+                      data-no-translate="true"
+                      className="text-[16px] font-bold tracking-[-0.03em] text-accent-text"
+                    >
+                      {homeDashboard.totalPrs}
+                    </p>
+                    <p className="mt-0.5 text-[9px] text-ink-secondary">PRs</p>
+                  </div>
+                </div>
+              </section>
+
+              {/* 4. RECENT ACTIVITY (Most recent completed workout) */}
+              <section
+                aria-label="Recent activity"
+                className={`${ui.card} p-4`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-ink">
+                    Recent Activity
+                  </p>
+                  {homeDashboard.latestWorkout && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProgressInitialSection("history");
+                        setProgressSectionNonce((n) => n + 1);
+                        setActiveTab("Progress");
+                      }}
+                      className="text-[10px] font-semibold text-accent-text hover:underline"
+                    >
+                      History
+                    </button>
+                  )}
+                </div>
+
+                {homeDashboard.latestWorkout ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProgressInitialSection("history");
+                      setProgressSectionNonce((n) => n + 1);
+                      setActiveTab("Progress");
+                    }}
+                    className={`${ui.cardSubtle} mt-2.5 flex w-full items-center justify-between gap-3 p-3 text-start transition-colors hover:bg-hover`}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-[12px] font-semibold text-ink">
+                        {homeDashboard.latestWorkout.routineTitle}
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-ink-secondary">
+                        {`${formatRecentWorkoutDate(homeDashboard.latestWorkout.completedAt)} · ${Math.max(1, Math.round(homeDashboard.latestWorkout.durationSeconds / 60))} min · ${homeDashboard.latestWorkout.totalSetsCompleted} sets`}
+                      </p>
+                    </div>
+                    <span
+                      data-no-translate="true"
+                      className="shrink-0 text-[11px] font-semibold text-accent-text"
+                    >
+                      {homeDashboard.latestWorkout.totalVolumeKg > 0
+                        ? `${homeDashboard.latestWorkout.totalVolumeKg.toLocaleString()} kg`
+                        : `${homeDashboard.latestWorkout.totalSetsCompleted} sets`}
+                    </span>
+                  </button>
+                ) : (
+                  <p className="mt-2 text-[11px] text-ink-secondary">
+                    No completed workouts yet — finish your first session to see it here.
+                  </p>
+                )}
+              </section>
+
+              {/* 5. ACTIVE ROUTINE & WEEKLY SCHEDULE */}
+              <section
+                aria-label="Active routine schedule"
+                className={`${ui.card} p-4`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
+                      Active Routine
+                    </p>
+                    <p className="mt-0.5 truncate text-[13px] font-semibold text-ink">
+                      {homeDashboard.selectedGym &&
+                      activeRoutineSelection.mode === "gym"
+                        ? homeDashboard.selectedGym.title
+                        : homeDashboard.activePersonal
+                          ? homeDashboard.activePersonal.title
+                          : "No routine selected"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("Workout")}
+                    className="shrink-0 text-[10px] font-semibold text-accent-text hover:underline"
+                  >
+                    Manage
+                  </button>
+                </div>
+
+                {homeDashboard.activePersonal &&
+                activeRoutineSelection.mode !== "gym" ? (
+                  <div className="mt-3 grid grid-cols-7 gap-1">
+                    {homeDashboard.personalWeekDays.map((d) => {
+                      const isToday = d.day === homeDashboard.todayWeekday;
+                      return (
+                        <div
+                          key={d.day}
+                          className={`flex flex-col items-center rounded-xl border py-1.5 text-center ${
+                            d.isRestDay
+                              ? "border-line bg-subtle opacity-65"
+                              : isToday
+                                ? "border-accent bg-accent-soft text-accent-text"
+                                : "border-line-strong bg-surface text-ink"
+                          }`}
+                        >
+                          <span className="text-[9px] font-semibold">{d.day}</span>
+                          <span className="mt-0.5 text-[8px] text-ink-muted">
+                            {d.isRestDay ? "Rest" : `${d.exercises.length}ex`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : homeDashboard.selectedGym &&
+                  activeRoutineSelection.mode === "gym" ? (
+                  <p className="mt-2 text-[10px] text-ink-secondary">
+                    {`Gym plan · ${homeDashboard.selectedGym.exercises.length} exercises`}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-[10px] text-ink-secondary">
+                    Build a custom weekly split or follow a gym workout plan.
+                  </p>
+                )}
+              </section>
+
+              {/* 6. GYM CHECK-IN & DIGITAL PASS */}
               <section
                 aria-labelledby="digital-pass-heading"
-                className="overflow-hidden rounded-[22px] bg-[#172433] text-white shadow-[0_12px_30px_rgba(23,36,51,0.17)]"
+                className={`${ui.card} p-4`}
               >
-                <div className="flex items-center justify-between px-5 pb-3 pt-5">
-                  <div>
-                    <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#82cdb0]">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-accent-text">
                       Digital member pass
                     </p>
                     <h2
                       id="digital-pass-heading"
-                      className="mt-1 text-[19px] font-semibold tracking-[-0.035em]"
+                      className="mt-0.5 truncate text-[14px] font-semibold text-ink"
                     >
-                      {member?.name ?? "Member pass"}
-                    </h2>
-                  </div>
-                  <span
-                    className="grid size-10 place-items-center rounded-full bg-white/10 text-[11px] font-semibold text-white"
-                    aria-hidden="true"
-                  >
-                    {member?.name
-                      .split(" ")
-                      .map((part) => part[0])
-                      .join("")
-                      .slice(0, 2)
-                      .toUpperCase() ?? "GY"}
-                  </span>
-                </div>
-                <div className="mx-5 grid grid-cols-2 gap-3 rounded-xl bg-white/[0.07] p-3.5">
-                  <div>
-                    <p className="text-[9px] text-slate-400">MEMBERSHIP PLAN</p>
-                    <p className="mt-1 text-[11px] font-medium">
                       {member?.planName ?? "No active plan"}
+                    </h2>
+                    <p className="mt-0.5 text-[10px] text-ink-secondary">
+                      {member?.expiryDate
+                        ? `Valid through ${formatMemberDate(member.expiryDate)}`
+                        : "Visit the front desk to activate a membership plan."}
                     </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[9px] text-slate-400">VALID THROUGH</p>
-                    <p className="mt-1 text-[11px] font-medium">
-                      {formatMemberDate(member?.expiryDate ?? null)}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center justify-between border-t border-white/10 px-5 py-3">
-                  <span className="text-[9px] text-slate-400">MEMBER ID</span>
-                  <span className="font-mono text-[10px] tracking-wide text-slate-200">
+                  <span className="shrink-0 font-mono text-[10px] text-ink-muted">
                     {member?.id.slice(-8).toUpperCase() ?? "—"}
                   </span>
                 </div>
-              </section>
 
-              <button
-                type="button"
-                onClick={openQrScanner}
-                className="flex min-h-14 w-full items-center justify-center gap-2.5 rounded-2xl bg-[#278968] px-4 text-[13px] font-semibold text-white shadow-[0_8px_20px_rgba(39,137,104,0.2)] transition-colors hover:bg-[#207858]"
-              >
-                <ScanLine size={19} aria-hidden="true" />
-                Scan Gym QR Code
-              </button>
+                {member?.status === "Unpaid" && (
+                  <div
+                    role="alert"
+                    className="mt-3 flex items-start gap-2.5 rounded-xl border border-warning-border bg-warning-soft p-3"
+                  >
+                    <Wallet
+                      size={15}
+                      className="mt-0.5 shrink-0 text-warning-text"
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <p className="text-[10px] font-semibold text-warning-text">
+                        Payment needs attention
+                      </p>
+                      <p className="mt-0.5 text-[10px] leading-4 text-ink-secondary">
+                        Latest payment status: {member.paymentStatus}. Please check with the front
+                        desk.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={openQrScanner}
+                  className={`${ui.btnSecondary} mt-3.5 flex min-h-11 w-full rounded-xl px-4 text-[12px]`}
+                >
+                  <ScanLine size={17} className="text-accent-text" aria-hidden="true" />
+                  Scan Gym QR Code
+                </button>
+              </section>
 
               {upcomingMemberSessions.length > 0 && (
                 <section
                   aria-label="Upcoming coaching session"
-                  className="rounded-2xl border border-[#d6e5fa] bg-[#f4f8ff] p-3.5"
+                  className={`${ui.card} p-3.5`}
                 >
                   <div className="flex items-start gap-2.5">
-                    <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-[#dce9fc] text-[#355ca0]">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
                       <CalendarDays size={15} aria-hidden="true" />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-[#355ca0]">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
                         Upcoming session with {upcomingMemberSessions[0].trainerName}
                       </p>
-                      <p className="mt-0.5 truncate text-[11px] font-semibold text-[#243242]">
+                      <p className="mt-0.5 truncate text-[11px] font-semibold text-ink">
                         {upcomingMemberSessions[0].title}
                       </p>
-                      <p className="mt-0.5 text-[10px] text-[#5c6d82]">
+                      <p className="mt-0.5 text-[10px] text-ink-secondary">
                         {formatSessionDateTime(upcomingMemberSessions[0].startsAt)} ·{" "}
                         {upcomingMemberSessions[0].durationMinutes} min
                       </p>
@@ -1764,279 +2608,134 @@ export function MemberApp() {
                   </div>
                 </section>
               )}
-
-              <section
-                aria-label="Membership and payment status"
-                className="rounded-2xl border border-[#e9edf1] bg-white p-4"
-              >
-                <div className="flex items-start gap-3">
-                  <span
-                    className={`grid size-9 shrink-0 place-items-center rounded-xl ${
-                      member?.status === "Active"
-                        ? "bg-[#eaf6f0] text-[#278968]"
-                        : "bg-[#fff4e8] text-[#bd7838]"
-                    }`}
-                  >
-                    <CheckCircle2 size={17} aria-hidden="true" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] font-semibold text-[#354153]">
-                      Membership {member?.status?.toLowerCase() ?? "inactive"}
-                    </p>
-                    <p className="mt-1 text-[10px] text-[#87909d]">
-                      {member?.startDate
-                        ? `Valid ${formatMemberDate(member.startDate)} to ${formatMemberDate(member.expiryDate)}.`
-                        : "Visit the front desk to activate a membership plan."}
-                    </p>
-                  </div>
-                </div>
-                {member?.status === "Unpaid" && (
-                  <div
-                    role="alert"
-                    className="mt-3 flex items-start gap-2.5 rounded-xl border border-[#f2e3ca] bg-[#fff9ef] p-3"
-                  >
-                    <Wallet size={15} className="mt-0.5 shrink-0 text-[#bd7838]" aria-hidden="true" />
-                    <div>
-                      <p className="text-[10px] font-semibold text-[#94602e]">
-                        Payment needs attention
-                      </p>
-                      <p className="mt-0.5 text-[10px] leading-4 text-[#9b764f]">
-                        Latest payment status: {member.paymentStatus}. Please check with the front
-                        desk.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </section>
-
-              <button
-                type="button"
-                onClick={() => setActiveTab("Workout")}
-                className="flex w-full items-center gap-3 rounded-2xl border border-[#e9edf1] bg-white p-4 text-left hover:bg-[#fbfcfc]"
-              >
-                <span className="grid size-9 place-items-center rounded-xl bg-[#eef2ff] text-[#6675d9]">
-                  <Dumbbell size={17} aria-hidden="true" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[11px] font-semibold text-[#354153]">
-                    Today&apos;s workout
-                  </span>
-                  <span className="mt-1 block truncate text-[10px] text-[#87909d]">
-                    {workoutPlan
-                      ? `${workoutPlan.title} · ${workoutPlan.exercises.length} exercises`
-                      : "No assigned workout plan yet"}
-                  </span>
-                </span>
-                <span className="text-[10px] font-semibold text-[#278968]">View</span>
-              </button>
             </div>
           )}
 
-          {activeTab === "Workout" && (
-            <section aria-labelledby="today-workout-heading">
-              <div className="mb-4 flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#83908d]">
-                    Today&apos;s assigned routine
-                  </p>
-                  <h2
-                    id="today-workout-heading"
-                    className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-[#243242]"
-                  >
-                    {workoutPlan?.title ?? "No workout assigned"}
-                  </h2>
-                  <p className="mt-1 text-[10px] text-[#87909d]">
-                    {trainer
-                      ? `Coach ${trainer.name} · ${trainer.specialty}`
-                      : workoutPlan?.targetGoal ??
-                        "Ask your gym trainer to assign a workout plan."}
-                  </p>
-                </div>
-                {completedSetCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setCompletedSets([])}
-                    className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-lg border border-[#e3e8ec] bg-white px-2.5 text-[9px] font-medium text-[#687585] hover:bg-slate-50"
-                  >
-                    <RotateCcw size={11} aria-hidden="true" />
-                    Reset
-                  </button>
-                )}
-              </div>
+          <div className={activeTab === "Workout" ? "block" : "hidden"}>
+            <MemberWorkoutHub
+              memberId={member?.id ?? ""}
+              trainer={
+                trainer ? { name: trainer.name, specialty: trainer.specialty } : null
+              }
+              gymWorkoutPlan={workoutPlan}
+              gymCatalogPlans={gymCatalogPlans}
+              archivedRoutines={archivedRoutines}
+              activeSelection={activeRoutineSelection}
+              serverActiveSession={serverActiveSession}
+              workoutEntryNonce={workoutEntryNonce}
+              libraryEntryNonce={libraryEntryNonce}
+              freeWorkoutNonce={freeWorkoutNonce}
+              upcomingSessions={upcomingMemberSessions}
+              personalRoutines={personalRoutines}
+              exerciseDefaults={exerciseDefaults}
+              exerciseHistory={exerciseHistory}
+              exerciseMediaCatalog={exerciseMediaCatalog}
+              progressionSettings={progressionSettings}
+              onWorkoutDataChanged={loadMemberWorkouts}
+              onNavigateToProgress={() => {
+                setProgressInitialSection("progress");
+                setProgressSectionNonce((n) => n + 1);
+                setActiveTab("Progress");
+              }}
+              onNavigateToAchievements={() => {
+                setProgressInitialSection("achievements");
+                setProgressSectionNonce((n) => n + 1);
+                setActiveTab("Progress");
+              }}
+              onActiveSessionPresenceChange={setActiveSessionSummary}
+              onSessionUnauthorized={() => {
+                clearMobileSessionToken();
+                setAuthStatus("unauthenticated");
+              }}
+            />
+          </div>
 
-              {upcomingMemberSessions.length > 0 && (
-                <div className="mb-4 rounded-xl border border-[#e3e8ec] bg-white p-3">
-                  <p className="text-[9px] font-semibold uppercase tracking-wide text-[#83908d]">
-                    Scheduled 1-on-1 Sessions
-                  </p>
-                  <ul className="mt-2 space-y-1.5">
-                    {upcomingMemberSessions.slice(0, 3).map((s) => (
-                      <li key={s.id} className="flex items-center justify-between text-[10px]">
-                        <span className="truncate font-semibold text-[#354153]">
-                          {s.title}
-                        </span>
-                        <span className="shrink-0 text-[#278968]">
-                          {formatSessionDateTime(s.startsAt)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {workoutPlan && (
-                <div className="mb-4 rounded-xl bg-[#eaf6f0] p-3">
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="font-medium text-[#526071]">Workout progress</span>
-                    <span className="font-semibold text-[#278968]">
-                      {completedSetCount} of {totalSets} sets complete
-                    </span>
-                  </div>
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
-                    <div
-                      className="h-full rounded-full bg-[#43ad82] transition-[width]"
-                      style={{ width: `${completionPercent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <ul className="space-y-2.5">
-                {exercises.map((exercise, index) => {
-                  const setCount = Math.max(1, Number.parseInt(exercise.sets, 10) || 1);
-                  const exerciseSetKeys = Array.from(
-                    { length: setCount },
-                    (_, setIndex) => `${workoutPlan?.id}:${exercise.id}:${setIndex + 1}`,
-                  );
-                  const complete = exerciseSetKeys.every((key) => completedSets.includes(key));
-                  return (
-                    <li
-                      key={`${workoutPlan?.id}-${exercise.id}`}
-                      className={`rounded-2xl border p-3.5 transition-colors ${
-                        complete ? "border-[#cfe9dc] bg-[#f0f9f4]" : "border-[#e9edf1] bg-white"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p
-                            className={`text-[11px] font-semibold ${
-                              complete ? "text-[#278968]" : "text-[#354153]"
-                            }`}
-                          >
-                            {index + 1}. {exercise.name}
-                          </p>
-                          <p className="mt-1.5 text-[9px] text-[#7b8794]">
-                            {exercise.reps} reps · {exercise.rest} rest
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-[#f2f4f6] px-2 py-0.5 text-[8px] font-medium text-[#6f7b89]">
-                          {exercise.muscle}
-                        </span>
-                      </div>
-                      <div
-                        className="mt-3 flex flex-wrap gap-2"
-                        role="group"
-                        aria-label={`${exercise.name} sets`}
-                      >
-                        {exerciseSetKeys.map((key, setIndex) => {
-                          const setComplete = completedSets.includes(key);
-                          return (
-                            <button
-                              key={key}
-                              type="button"
-                              aria-pressed={setComplete}
-                              onClick={() => toggleSet(key)}
-                              className={`inline-flex min-h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[9px] font-medium ${
-                                setComplete
-                                  ? "border-[#b8dfca] bg-[#e3f3e9] text-[#237e5f]"
-                                  : "border-[#e3e8ec] bg-white text-[#687585]"
-                              }`}
-                            >
-                              {setComplete ? (
-                                <Check size={12} aria-hidden="true" />
-                              ) : (
-                                <Circle size={12} aria-hidden="true" />
-                              )}
-                              Set {setIndex + 1}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-              {workoutPlan && (
-                <p className="mt-4 text-center text-[9px] text-[#9aa3ae]">
-                  Set progress is saved on this device for {member?.name ?? "your account"}.
-                </p>
-              )}
-            </section>
+          {activeTab === "Progress" && (
+            <MemberProgressView
+              progress={workoutProgress}
+              recentLogs={recentWorkoutLogs}
+              exerciseHistory={exerciseHistory}
+              achievements={memberAchievements}
+              progressionSettings={progressionSettings}
+              initialSection={progressInitialSection}
+              sectionNonce={progressSectionNonce}
+              onWorkoutDataChanged={loadMemberWorkouts}
+              onNavigateToWorkouts={() => setActiveTab("Workout")}
+              onSessionUnauthorized={() => {
+                clearMobileSessionToken();
+                setAuthStatus("unauthenticated");
+              }}
+            />
           )}
 
           {activeTab === "Visits" && (
             <section aria-labelledby="visits-heading">
               <div className="mb-4">
-                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#83908d]">
+                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
                   Your activity
                 </p>
                 <h2
                   id="visits-heading"
-                  className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-[#243242]"
+                  className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
                 >
                   Attendance history
                 </h2>
-                <p className="mt-1 text-[10px] text-[#87909d]">Your recent visits to the club</p>
+                <p className="mt-1 text-[10px] text-ink-secondary">
+                  Your recent visits to the club
+                </p>
               </div>
-              <div className="overflow-hidden rounded-2xl border border-[#e9edf1] bg-white">
-                <ul className="divide-y divide-[#eff1f4]">
+              <div className={`${ui.card} overflow-hidden`}>
+                <ul className="divide-y divide-divider">
                   {recentVisits.map((visit, index) => (
                     <li key={visit.id} className="flex items-center gap-3 p-3.5">
                       <span
-                        className={`grid size-9 shrink-0 place-items-center rounded-xl ${
+                        className={`grid size-9 shrink-0 place-items-center rounded-xl border ${
                           index === 0
-                            ? "bg-[#eaf6f0] text-[#278968]"
-                            : "bg-[#f2f4f6] text-[#7d8895]"
+                            ? "border-accent-border bg-accent-soft text-accent-text"
+                            : "border-line bg-subtle text-ink-secondary"
                         }`}
                       >
                         <Clock3 size={16} aria-hidden="true" />
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-semibold text-[#354153]">{visit.date}</p>
-                        <p className="mt-0.5 text-[9px] text-[#8993a0]">{visit.detail}</p>
+                        <p className="text-[11px] font-semibold text-ink">{visit.date}</p>
+                        <p className="mt-0.5 text-[9px] text-ink-muted">{visit.detail}</p>
                       </div>
-                      <span className="text-[10px] font-medium text-[#687585]">{visit.time}</span>
+                      <span className="text-[10px] font-medium text-ink-secondary">
+                        {visit.time}
+                      </span>
                     </li>
                   ))}
                   {recentVisits.length === 0 && (
-                    <li className="p-6 text-center text-[10px] text-[#8993a0]">
+                    <li className="p-6 text-center text-[10px] text-ink-secondary">
                       No visits recorded yet. Scan the reception QR code when you arrive!
                     </li>
                   )}
                 </ul>
               </div>
-              <p className="mt-3 text-center text-[9px] text-[#9aa3ae]">
+              <p className="mt-3 text-center text-[9px] text-ink-muted">
                 {recentVisits.length} recent {recentVisits.length === 1 ? "visit" : "visits"}
               </p>
             </section>
           )}
 
           {activeTab === "Profile" && (
-            <section aria-labelledby="profile-heading">
-              <div className="mb-4">
-                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#83908d]">
+            <section aria-labelledby="profile-heading" className="space-y-3">
+              <div className="mb-1">
+                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
                   Your account
                 </p>
                 <h2
                   id="profile-heading"
-                  className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-[#243242]"
+                  className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
                 >
                   Profile &amp; membership
                 </h2>
               </div>
-              <div className="mb-3 flex items-center gap-3 rounded-2xl border border-[#e9edf1] bg-white p-4">
+
+              <div className={`${ui.card} flex items-center gap-3 p-4`}>
                 <span
-                  className="grid size-12 shrink-0 place-items-center rounded-full bg-[#e8f4ee] text-[13px] font-semibold text-[#2e8868]"
+                  className="grid size-12 shrink-0 place-items-center rounded-full border border-accent-border bg-accent-soft text-[13px] font-semibold text-accent-text"
                   aria-hidden="true"
                 >
                   {member?.name
@@ -2047,38 +2746,40 @@ export function MemberApp() {
                     .toUpperCase() ?? "GY"}
                 </span>
                 <div className="min-w-0">
-                  <p className="truncate text-[13px] font-semibold text-[#354153]">
+                  <p className="truncate text-[13px] font-semibold text-ink">
                     {member?.name ?? "Member"}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] text-[#87909d]">
+                  <p className="mt-0.5 truncate text-[10px] text-ink-secondary">
                     {member?.phone ?? ""}
                     {member?.email ? ` · ${member.email}` : ""}
                   </p>
                   {member?.gymName && (
-                    <p className="mt-0.5 truncate text-[9px] text-[#9aa3ae]">{member.gymName}</p>
+                    <p className="mt-0.5 truncate text-[9px] text-ink-muted">
+                      {member.gymName}
+                    </p>
                   )}
                 </div>
               </div>
 
-              <div className="space-y-3 rounded-2xl border border-[#e9edf1] bg-white p-4">
+              <div className={`${ui.card} space-y-3 p-4`}>
                 <div className="flex items-center gap-3">
-                  <span className="grid size-8 place-items-center rounded-lg bg-[#eaf6f0] text-[#278968]">
+                  <span className="grid size-8 place-items-center rounded-lg border border-accent-border bg-accent-soft text-accent-text">
                     <CheckCircle2 size={15} aria-hidden="true" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[10px] text-[#8993a0]">SUBSCRIPTION</p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-[#354153]">
+                    <p className="text-[10px] text-ink-muted">SUBSCRIPTION</p>
+                    <p className="mt-0.5 text-[11px] font-semibold text-ink">
                       {member?.planName ?? "No active plan"} · {member?.status ?? "Unknown"}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 border-t border-[#edf0f2] pt-3">
-                  <span className="grid size-8 place-items-center rounded-lg bg-[#f2f4f6] text-[#6f7b89]">
+                <div className="flex items-center gap-3 border-t border-divider pt-3">
+                  <span className="grid size-8 place-items-center rounded-lg border border-line bg-subtle text-ink-secondary">
                     <CreditCard size={15} aria-hidden="true" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[10px] text-[#8993a0]">VALID THROUGH</p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-[#354153]">
+                    <p className="text-[10px] text-ink-muted">VALID THROUGH</p>
+                    <p className="mt-0.5 text-[11px] font-semibold text-ink">
                       {formatMemberDate(member?.startDate ?? null)} –{" "}
                       {formatMemberDate(member?.expiryDate ?? null)}
                     </p>
@@ -2087,14 +2788,18 @@ export function MemberApp() {
                 {member?.status === "Unpaid" && (
                   <div
                     role="alert"
-                    className="flex items-start gap-2.5 border-t border-[#edf0f2] pt-3"
+                    className="flex items-start gap-2.5 border-t border-divider pt-3"
                   >
-                    <Wallet size={15} className="mt-0.5 shrink-0 text-[#bd7838]" aria-hidden="true" />
+                    <Wallet
+                      size={15}
+                      className="mt-0.5 shrink-0 text-warning-text"
+                      aria-hidden="true"
+                    />
                     <div>
-                      <p className="text-[10px] font-semibold text-[#94602e]">
+                      <p className="text-[10px] font-semibold text-warning-text">
                         Payment status · {member.paymentStatus}
                       </p>
-                      <p className="mt-0.5 text-[9px] leading-4 text-[#9b764f]">
+                      <p className="mt-0.5 text-[9px] leading-4 text-ink-secondary">
                         Contact the front desk to settle your balance before check-in.
                       </p>
                     </div>
@@ -2102,27 +2807,31 @@ export function MemberApp() {
                 )}
               </div>
 
-              <div className="mt-3 rounded-2xl border border-[#e9edf1] bg-white p-4">
+              <div className={`${ui.card} p-4`}>
                 <div className="flex items-center gap-2">
-                  <Dumbbell size={15} className="text-[#6675d9]" aria-hidden="true" />
-                  <p className="text-[11px] font-semibold text-[#354153]">Assigned trainer</p>
+                  <Dumbbell size={15} className="text-accent-text" aria-hidden="true" />
+                  <p className="text-[11px] font-semibold text-ink">Assigned trainer</p>
                 </div>
-                <p className="mt-2 text-[11px] text-[#687585]">
+                <p className="mt-2 text-[11px] text-ink-secondary">
                   {trainer ? `${trainer.name} · ${trainer.specialty}` : "No trainer assigned"}
                 </p>
                 {trainer?.phone && (
-                  <p className="mt-0.5 text-[10px] text-[#8993a0]">Phone: {trainer.phone}</p>
+                  <p className="mt-0.5 text-[10px] text-ink-muted">Phone: {trainer.phone}</p>
                 )}
-                <p className="mt-1 text-[10px] text-[#8993a0]">
+                <p className="mt-1 text-[10px] text-ink-muted">
                   Current plan: {workoutPlan?.title ?? "None"}
                 </p>
               </div>
+
+              {/* Application Settings: Workout Rest Timer & Appearance */}
+              <RestTimerSettingsControl />
+              <ThemePreferenceControl />
 
               <button
                 type="button"
                 onClick={() => void handleLogout()}
                 disabled={isLoggingOut}
-                className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#f0d5d3] bg-white text-[11px] font-semibold text-[#a64141] hover:bg-[#fff6f5] disabled:opacity-60"
+                className={`${ui.btnDangerOutline} min-h-11 w-full text-[11px]`}
               >
                 <LogOut size={15} aria-hidden="true" />
                 {isLoggingOut ? "Signing out…" : "Sign out"}
