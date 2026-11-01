@@ -1,5 +1,7 @@
-const TENANT_PARAM_KEYS = ["gymId", "gym_id", "tenantId", "tenant_id"] as const;
-const TENANT_HEADER_KEYS = ["x-gym-id", "x-tenant-id"] as const;
+import { doesGymIdentityMatchSlug } from "@/lib/gym-routing";
+
+const TENANT_PARAM_KEYS = ["gymId", "gym_id", "tenantId", "tenant_id", "gymSlug", "gym_slug"] as const;
+const TENANT_HEADER_KEYS = ["x-gym-id", "x-tenant-id", "x-gymos-gym-slug"] as const;
 
 /**
  * Extracts any explicit tenant/gym identifier supplied by the caller via query string,
@@ -42,7 +44,7 @@ export function extractRequestedGymRefs(
 
 function matchesAuthorizedGym(
   candidate: string,
-  authorizedGym: { id: string; slug?: string },
+  authorizedGym: { id: string; slug?: string; subdomain?: string | null },
 ): boolean {
   const trimmed = candidate.trim();
   if (!trimmed) return true;
@@ -51,24 +53,34 @@ function matchesAuthorizedGym(
   if (trimmed.toUpperCase().startsWith(upperPrefix)) {
     const inner = trimmed.slice(upperPrefix.length).trim();
     if (inner === authorizedGym.id) return true;
-    if (authorizedGym.slug && inner.toLowerCase() === authorizedGym.slug.toLowerCase()) {
+    if (
+      doesGymIdentityMatchSlug(
+        { slug: authorizedGym.slug, subdomain: authorizedGym.subdomain },
+        inner,
+      )
+    ) {
       return true;
     }
     return false;
   }
-  if (authorizedGym.slug && trimmed.toLowerCase() === authorizedGym.slug.toLowerCase()) {
+  if (
+    doesGymIdentityMatchSlug(
+      { slug: authorizedGym.slug, subdomain: authorizedGym.subdomain },
+      trimmed,
+    )
+  ) {
     return true;
   }
   return false;
 }
 
 /**
- * Returns true if the caller explicitly passed any `gymId` / `tenantId` in query params,
- * headers, or JSON body that conflicts with the authenticated user's verified gym.
+ * Returns true if the caller explicitly passed any `gymId` / `tenantId` / `x-gymos-gym-slug`
+ * in query params, headers, or JSON body that conflicts with the authenticated user's verified gym.
  */
 export function hasConflictingGymRef(
   request: Request,
-  authorizedGym: { id: string; slug?: string },
+  authorizedGym: { id: string; slug?: string; subdomain?: string | null },
   body?: Record<string, unknown> | null,
 ): boolean {
   const refs = extractRequestedGymRefs(request, body);

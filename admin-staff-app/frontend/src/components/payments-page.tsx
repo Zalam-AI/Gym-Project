@@ -296,10 +296,10 @@ function ReceiptModal({ transaction, onClose }: { transaction: Transaction; onCl
           </span>
         </div>
         <dl className="space-y-3 border-t border-[#edf0f2] py-4 text-[11px]">
-          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Member</dt><dd className="text-right font-medium text-[#354153]">{transaction.memberName}</dd></div>
-          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Date &amp; time</dt><dd className="text-right font-medium text-[#354153]">{formatDateTime(transaction.dateTime)}</dd></div>
-          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Plan / item</dt><dd className="text-right font-medium text-[#354153]">{transaction.description}</dd></div>
-          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Payment method</dt><dd className="text-right font-medium text-[#354153]">{transaction.method}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Member</dt><dd className="text-end font-medium text-[#354153]">{transaction.memberName}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Date &amp; time</dt><dd className="text-end font-medium text-[#354153]">{formatDateTime(transaction.dateTime)}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Plan / item</dt><dd className="text-end font-medium text-[#354153]">{transaction.description}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8993a0]">Payment method</dt><dd className="text-end font-medium text-[#354153]">{transaction.method}</dd></div>
         </dl>
         <div className="flex items-center justify-between border-t border-[#edf0f2] pt-4">
           <span className="text-[12px] font-semibold text-[#526071]">Total</span>
@@ -516,7 +516,7 @@ export function PaymentsPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] border-collapse text-left">
+              <table className="w-full min-w-[1120px] border-collapse text-start">
                 <caption className="sr-only">Gym payment transaction history</caption>
                 <thead>
                   <tr className="bg-[#fafbfc]">

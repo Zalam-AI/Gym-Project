@@ -883,7 +883,7 @@ export function MembersPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left">
+              <table className="w-full min-w-[760px] border-collapse text-start">
                 <caption className="sr-only">Gym members and membership details</caption>
                 <thead>
                   <tr className="bg-[#fafbfc]">

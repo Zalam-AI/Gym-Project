@@ -414,7 +414,7 @@ export function MemberOnboardingView({
                           key={plan.id}
                           type="button"
                           onClick={() => setSelectedPlanId(plan.id)}
-                          className={`w-full rounded-2xl border p-4 text-left transition-colors ${
+                          className={`w-full rounded-2xl border p-4 text-start transition-colors ${
                             selected
                               ? "border-accent bg-elevated"
                               : "border-line bg-surface hover:border-line-strong"

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -16,6 +17,11 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
+import {
+  buildGymPath,
+  extractGymSlugFromPathname,
+  isNeutralBrowserHostname,
+} from "@/lib/gym-routing";
 
 type DashboardData = {
   gym: {
@@ -68,9 +74,11 @@ function formatEgp(amount: number) {
 function AttendanceChart({
   series,
   isLoading,
+  effectiveSlug,
 }: {
   series: DashboardData["attendanceSeries"];
   isLoading: boolean;
+  effectiveSlug: string | null;
 }) {
   const safeSeries =
     series.length === 7
@@ -117,7 +125,7 @@ function AttendanceChart({
           </p>
         </div>
         <Link
-          href="/attendance"
+          href={buildGymPath("/attendance", effectiveSlug)}
           aria-label="Date range: last 7 days — view attendance"
           className="flex min-h-9 items-center gap-2 rounded-lg border border-[#e9edf1] px-3 text-[11px] font-medium text-[#526071] hover:bg-[#f7f9fa]"
         >
@@ -201,9 +209,11 @@ function AttendanceChart({
 function AttentionList({
   items,
   isLoading,
+  effectiveSlug,
 }: {
   items: DashboardData["attentionItems"];
   isLoading: boolean;
+  effectiveSlug: string | null;
 }) {
   return (
     <Card className="p-5 sm:p-6">
@@ -242,7 +252,7 @@ function AttentionList({
           {items.map((item, index) => (
             <li key={item.id} className="py-3 first:pt-0 last:pb-0">
               <Link
-                href={item.href}
+                href={buildGymPath(item.href, effectiveSlug)}
                 className="flex items-center gap-3 rounded-xl p-1.5 -m-1.5 transition-colors hover:bg-[#f7f9fa]"
               >
                 <span
@@ -277,8 +287,17 @@ function AttentionList({
 }
 
 export function Dashboard() {
+  const pathname = usePathname();
+  const pathSlug = extractGymSlugFromPathname(pathname);
   const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const effectiveSlug =
+    pathSlug ||
+    (typeof window !== "undefined" &&
+    isNeutralBrowserHostname(window.location.hostname) &&
+    data?.gym.slug
+      ? data.gym.slug
+      : null);
   const [error, setError] = useState<string | null>(null);
 
   const loadDashboard = useCallback(async () => {
@@ -399,7 +418,7 @@ export function Dashboard() {
           {stats.map((stat) => {
             const Icon = stat.icon;
             return (
-              <Link key={stat.label} href={stat.href} className="block group">
+              <Link key={stat.label} href={buildGymPath(stat.href, effectiveSlug)} className="block group">
                 <Card className="p-5 transition-shadow group-hover:shadow-[0_6px_22px_rgba(23,36,51,0.06)]">
                   <div className="flex items-start justify-between">
                     <div>
@@ -436,8 +455,16 @@ export function Dashboard() {
         </section>
 
         <div className="mb-5 grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(330px,1fr)]">
-          <AttendanceChart series={data?.attendanceSeries ?? []} isLoading={isLoading} />
-          <AttentionList items={data?.attentionItems ?? []} isLoading={isLoading} />
+          <AttendanceChart
+            series={data?.attendanceSeries ?? []}
+            isLoading={isLoading}
+            effectiveSlug={effectiveSlug}
+          />
+          <AttentionList
+            items={data?.attentionItems ?? []}
+            isLoading={isLoading}
+            effectiveSlug={effectiveSlug}
+          />
         </div>
 
         <footer className="flex flex-wrap items-center justify-between gap-2 px-1 pb-5 pt-7 text-[10px] text-[#9aa3ae]">

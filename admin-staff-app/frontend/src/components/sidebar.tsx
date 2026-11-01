@@ -12,6 +12,12 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import {
+  buildGymPath,
+  extractGymSlugFromPathname,
+  isNeutralBrowserHostname,
+} from "@/lib/gym-routing";
 import { useLanguage } from "@/lib/i18n";
 
 export type NavigationPage =
@@ -59,7 +65,12 @@ export function Sidebar({
   gymLogoText,
   gymAccentColor,
 }: SidebarProps) {
+  const pathname = usePathname();
   const { isRtl, t } = useLanguage();
+  const pathSlug = extractGymSlugFromPathname(pathname);
+  const isNeutralHost =
+    typeof window === "undefined" ? true : isNeutralBrowserHostname(window.location.hostname);
+  const effectiveSlug = pathSlug || (isNeutralHost && gymSlug ? gymSlug : null);
   const accentColor =
     gymAccentColor && /^#[0-9a-fA-F]{6}$/.test(gymAccentColor)
       ? gymAccentColor
@@ -84,7 +95,7 @@ export function Sidebar({
       >
         <div className="mb-8 flex items-center justify-between px-2">
           <Link
-            href="/"
+            href={buildGymPath("/", effectiveSlug)}
             className="flex min-w-0 items-center gap-3 rounded-lg"
             aria-label={t("GymOS home")}
             onClick={onClose}
@@ -132,7 +143,7 @@ export function Sidebar({
             return (
               <Link
                 key={id}
-                href={href}
+                href={buildGymPath(href, effectiveSlug)}
                 aria-current={isActive ? "page" : undefined}
                 onClick={onClose}
                 className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-[13px] font-medium ${
@@ -166,9 +177,13 @@ export function Sidebar({
           <p className="truncate text-[12px] font-semibold text-white">
             {gymName || t("GymOS Workspace")}
           </p>
-          {gymSubdomain || gymSlug ? (
+          {gymSlug ? (
             <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">
-              {gymSubdomain || gymSlug}
+              /gym/{gymSlug}
+            </p>
+          ) : gymSubdomain ? (
+            <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">
+              {gymSubdomain}
             </p>
           ) : (
             <p className="mt-1 text-[11px] leading-5 text-slate-400">

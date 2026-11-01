@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { mobileFetch, readMobileJson } from "@/lib/mobile-fetch";
+import { matchesExerciseQuery } from "@/lib/exercise-media";
 import {
   evaluateMemberAchievements,
   type MemberAchievementsSummary,
@@ -469,12 +470,10 @@ export function MemberProgressView({
   }, [dateRange, exerciseHistory, selectedChartExerciseKey]);
 
   const filteredExercisePickerList = useMemo(() => {
-    const q = exerciseFilterQuery.trim().toLowerCase();
+    const q = exerciseFilterQuery.trim();
     if (!q) return exerciseHistory;
-    return exerciseHistory.filter(
-      (ex) =>
-        ex.exerciseName.toLowerCase().includes(q) ||
-        ex.muscle.toLowerCase().includes(q),
+    return exerciseHistory.filter((ex) =>
+      matchesExerciseQuery({ name: ex.exerciseName, muscle: ex.muscle }, q),
     );
   }, [exerciseFilterQuery, exerciseHistory]);
 
@@ -710,7 +709,7 @@ export function MemberProgressView({
       </div>
 
       {/* Sub-navigation + Date Range Selector */}
-      <div className="space-y-2">
+      <div data-tour-id="tour-progress-overview" className="space-y-2">
         <div
           role="tablist"
           aria-label="Progress and history sections"

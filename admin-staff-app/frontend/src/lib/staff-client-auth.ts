@@ -1,5 +1,8 @@
+import { extractGymSlugFromPathname } from "@/lib/gym-routing";
+
 const STAFF_TOKEN_KEY = "gymos_staff_session_v2";
 const SESSION_HEADER = "X-GymOS-Session";
+const GYM_SLUG_HEADER = "X-GymOS-Gym-Slug";
 
 let memoryStaffToken: string | null = null;
 let fetchPatched = false;
@@ -87,19 +90,6 @@ export function ensureStaffFetchPatched(): void {
       urlString = input.url;
     }
 
-    const isPublicAuth =
-      urlString.includes("/api/auth/login") ||
-      urlString.includes("/api/auth/register") ||
-      urlString.includes("/api/tenant");
-
-    const token = isPublicAuth ? null : getStaffSessionToken();
-    if (!token) {
-      return originalFetch(input, {
-        ...init,
-        credentials: init?.credentials ?? "same-origin",
-      });
-    }
-
     const isSameOriginApi =
       urlString.startsWith("/api/") ||
       urlString.startsWith(`${window.location.origin}/api/`);
@@ -108,10 +98,43 @@ export function ensureStaffFetchPatched(): void {
       return originalFetch(input, init);
     }
 
+    const isPlatformApi =
+      urlString.startsWith("/api/platform/") ||
+      urlString.startsWith(`${window.location.origin}/api/platform/`);
+
+    if (isPlatformApi) {
+      return originalFetch(input, {
+        ...init,
+        credentials: init?.credentials ?? "same-origin",
+      });
+    }
+
+    const activePathSlug = extractGymSlugFromPathname(window.location.pathname);
+
+    const isPublicAuth =
+      urlString.includes("/api/auth/login") ||
+      urlString.includes("/api/auth/register") ||
+      urlString.includes("/api/tenant");
+
+    const token = isPublicAuth ? null : getStaffSessionToken();
+
     const headers = new Headers(
       init?.headers ??
         (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined),
     );
+
+    if (activePathSlug && !headers.has(GYM_SLUG_HEADER)) {
+      headers.set(GYM_SLUG_HEADER, activePathSlug);
+    }
+
+    if (!token) {
+      return originalFetch(input, {
+        ...init,
+        credentials: init?.credentials ?? "same-origin",
+        headers,
+      });
+    }
+
     if (!headers.has(SESSION_HEADER)) {
       headers.set(SESSION_HEADER, token);
     }

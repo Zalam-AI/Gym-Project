@@ -1537,24 +1537,45 @@ describe("GymOS Post-Deployment Multi-Gym End-to-End Verification Suite (Iron Ho
     assert.equal(dashB.json.gym?.name, "Power Zone");
   });
 
-  it("15. Verifies refreshing the website preserves authenticated sessions across all pages until explicit logout", async () => {
-    const protectedPages = [
-      "/",
-      "/members",
-      "/trainers",
-      "/memberships",
-      "/payments",
-      "/attendance",
-      "/settings",
-    ];
+  it("15. Verifies `/` Super Admin root isolation and `/gym/<slug>` authenticated session persistence until explicit logout", async () => {
+    const sInfo = await staffRequest<{ gym?: { name: string; slug?: string } }>(
+      "/api/auth/session",
+      { cookie: state.ironHouse.ownerCookie },
+    );
+    assert.equal(sInfo.status, 200);
+    const ironSlug = sInfo.json.gym?.slug || "iron-house";
+    const pInfo = await staffRequest<{ gym?: { slug?: string } }>("/api/auth/session", {
+      cookie: state.powerZone.ownerCookie,
+    });
+    const powerSlug = pInfo.json.gym?.slug || "power-zone";
 
-    // Unauthenticated session check returns 401 (AppShell redirects to /login on 401;
-    // when GYMOS_ALLOW_PREVIEW_ORIGINS=0 at build time, middleware also redirects HTML pages with 307)
+    // Unauthenticated session check returns 401
     const unauthSession = await staffRequest("/api/auth/session");
     assert.equal(unauthSession.status, 401);
 
-    // Authenticated hard refreshes across every staff route stay 200 OK
-    for (const page of protectedPages) {
+    // Gym Admin visiting `/` (Super Admin Dashboard) MUST NOT gain Super Admin access
+    const rootWithGymCookie = await staffRequest("/", {
+      cookie: state.ironHouse.ownerCookie,
+      redirect: "manual",
+    });
+    if (rootWithGymCookie.status === 307 || rootWithGymCookie.status === 302) {
+      assert.ok(
+        String(rootWithGymCookie.headers.get("location") ?? "").includes("/platform/login"),
+      );
+    }
+
+    // Authenticated hard refreshes across every `/gym/<slug>/*` staff route stay 200 OK
+    const protectedGymPages = [
+      `/gym/${ironSlug}`,
+      `/gym/${ironSlug}/members`,
+      `/gym/${ironSlug}/trainers`,
+      `/gym/${ironSlug}/memberships`,
+      `/gym/${ironSlug}/payments`,
+      `/gym/${ironSlug}/attendance`,
+      `/gym/${ironSlug}/settings`,
+    ];
+
+    for (const page of protectedGymPages) {
       const res = await staffRequest(page, {
         cookie: state.ironHouse.ownerCookie,
         redirect: "manual",
@@ -1562,8 +1583,15 @@ describe("GymOS Post-Deployment Multi-Gym End-to-End Verification Suite (Iron Ho
       assert.equal(res.status, 200, `Expected 200 on ${page} refresh, got ${res.status}`);
     }
 
-    // Authenticated user visiting /login redirects back to /
-    const loginWhileAuthed = await staffRequest("/login", {
+    // Cross-gym API request with mismatched X-GymOS-Gym-Slug must return 403
+    const crossSlugApi = await staffRequest("/api/members", {
+      cookie: state.ironHouse.ownerCookie,
+      headers: { "X-GymOS-Gym-Slug": powerSlug },
+    });
+    assert.equal(crossSlugApi.status, 403);
+
+    // Authenticated user visiting /gym/<slug>/login redirects back to /gym/<slug>
+    const loginWhileAuthed = await staffRequest(`/gym/${ironSlug}/login`, {
       cookie: state.ironHouse.ownerCookie,
       redirect: "manual",
     });
@@ -1573,6 +1601,7 @@ describe("GymOS Post-Deployment Multi-Gym End-to-End Verification Suite (Iron Ho
     for (let i = 0; i < 3; i += 1) {
       const s = await staffRequest<{ gym?: { name: string } }>("/api/auth/session", {
         cookie: state.ironHouse.ownerCookie,
+        headers: { "X-GymOS-Gym-Slug": ironSlug },
       });
       assert.equal(s.status, 200);
       assert.equal(s.json.gym?.name, "Iron House");

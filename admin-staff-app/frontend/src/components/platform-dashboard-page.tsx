@@ -8,7 +8,10 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  CreditCard,
   Edit3,
+  ExternalLink,
+  Eye,
   Globe,
   Headphones,
   KeyRound,
@@ -22,15 +25,30 @@ import {
   Settings,
   Shield,
   Sliders,
+  Tag,
   X,
 } from "lucide-react";
+import { SuperAdminGymDetailsModal } from "@/components/super-admin-gym-details-modal";
+import { SuperAdminPlansTab, type SaasPlanRow } from "@/components/super-admin-plans-tab";
+import {
+  RecordSaasPaymentModal,
+  type SaasPaymentRow,
+  SuperAdminSubscriptionsTab,
+} from "@/components/super-admin-subscriptions-tab";
 import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearPlatformSessionToken,
   ensurePlatformFetchPatched,
 } from "@/lib/platform-client-auth";
 
-type PlatformTab = "overview" | "gyms" | "config" | "activity" | "support";
+type PlatformTab =
+  | "overview"
+  | "gyms"
+  | "subscriptions"
+  | "plans"
+  | "config"
+  | "activity"
+  | "support";
 
 type PlatformAdminProfile = {
   id: string;
@@ -44,6 +62,7 @@ type PlatformGymRow = {
   id: string;
   name: string;
   slug: string;
+  workspacePath?: string;
   subdomain: string;
   subdomainUrl: string;
   customDomain: string | null;
@@ -62,10 +81,24 @@ type PlatformGymRow = {
     status: "active" | "inactive";
   } | null;
   platformSubscription: {
+    planId?: string | null;
+    planCode?: string;
+    planName?: string;
     planTier: "trial" | "starter" | "growth" | "enterprise";
     billingStatus: "trialing" | "active" | "past_due" | "paused" | "canceled";
+    paymentStatus?: string;
     billingCycle: "monthly" | "annual" | "custom";
+    priceAmount?: number;
+    monthlyRecurringAmount?: number;
+    startDate?: string | null;
+    expirationDate?: string | null;
     renewalDate: string | null;
+    gracePeriodDays?: number;
+    autoSuspendOnExpire?: boolean;
+    lifecycleState?: string;
+    inGracePeriod?: boolean;
+    isExpired?: boolean;
+    accessAllowed?: boolean;
     notes: string;
   };
   staffCount: number;
@@ -80,13 +113,18 @@ type PlatformSummary = {
   activeGyms: number;
   pendingGyms: number;
   suspendedGyms: number;
+  expiredSubscriptions?: number;
+  gracePeriodGyms?: number;
   totalEnrolledMembers: number;
   unaffiliatedMobileMembers: number;
+  totalMembersAll?: number;
   totalStaffUsers: number;
   totalTrainers: number;
   activeMemberSubscriptions: number;
   pendingMemberRequests: number;
   checkInsLast24h: number;
+  monthlyRecurringRevenue?: number;
+  totalSaasRevenueCollected?: number;
   subscriptionBreakdown: {
     trialing: number;
     active: number;
@@ -94,6 +132,18 @@ type PlatformSummary = {
     paused: number;
     canceled: number;
   };
+  recentPayments?: Array<{
+    id: string;
+    gymId: string;
+    gymName: string;
+    planName: string;
+    amount: number;
+    currency: string;
+    paymentMethod: string;
+    paymentStatus: string;
+    paidAt: string | null;
+    receiptNumber: string;
+  }>;
 };
 
 type PlatformConfigState = {
@@ -204,10 +254,18 @@ export function PlatformDashboardPage() {
   const [authReady, setAuthReady] = useState(false);
   const [admin, setAdmin] = useState<PlatformAdminProfile | null>(null);
   const [activeTab, setActiveTab] = useState<PlatformTab>("overview");
-  const [baseDomain, setBaseDomain] = useState("gymos.com");
+  const [, setBaseDomain] = useState("gymos.com");
 
   const [gyms, setGyms] = useState<PlatformGymRow[]>([]);
   const [summary, setSummary] = useState<PlatformSummary | null>(null);
+  const [saasPlans, setSaasPlans] = useState<SaasPlanRow[]>([]);
+  const [saasPayments, setSaasPayments] = useState<SaasPaymentRow[]>([]);
+  const [paymentTotals, setPaymentTotals] = useState({
+    totalCollected: 0,
+    collectedThisMonth: 0,
+  });
+  const [detailGymId, setDetailGymId] = useState<string | null>(null);
+  const [recordPaymentGymId, setRecordPaymentGymId] = useState<string | null>(null);
   const [config, setConfig] = useState<PlatformConfigState | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogRow[]>([]);
   const [systemEvents, setSystemEvents] = useState<SystemEventRow[]>([]);
@@ -221,8 +279,9 @@ export function PlatformDashboardPage() {
   // Filters
   const [gymSearch, setGymSearch] = useState("");
   const [gymStatusFilter, setGymStatusFilter] = useState<
-    "all" | "active" | "pending" | "suspended"
+    "all" | "active" | "pending" | "suspended" | "expired"
   >("all");
+  const [gymPlanFilter, setGymPlanFilter] = useState<string>("all");
   const [supportFilter, setSupportFilter] = useState<"all" | "open" | "in_progress" | "resolved">(
     "all",
   );
@@ -230,15 +289,16 @@ export function PlatformDashboardPage() {
   // Create Gym Modal
   const [showCreateGym, setShowCreateGym] = useState(false);
   const [createName, setCreateName] = useState("");
+  const [createSlug, setCreateSlug] = useState("");
   const [createAddress, setCreateAddress] = useState("");
   const [createPhone, setCreatePhone] = useState("");
   const [createSubdomain, setCreateSubdomain] = useState("");
   const [createCapacity, setCreateCapacity] = useState("100");
-  const [createTimezone, setCreateTimezone] = useState("Africa/Cairo");
+  const [createTimezone] = useState("Africa/Cairo");
   const [createStatus, setCreateStatus] = useState<"active" | "pending">("active");
-  const [createPlanTier, setCreatePlanTier] = useState<
-    "trial" | "starter" | "growth" | "enterprise"
-  >("starter");
+  const [createPlanCode, setCreatePlanCode] = useState<string>("starter");
+  const [createExpirationDate, setCreateExpirationDate] = useState("");
+  const [createGraceDays, setCreateGraceDays] = useState("7");
   const [createOwnerName, setCreateOwnerName] = useState("");
   const [createOwnerEmail, setCreateOwnerEmail] = useState("");
   const [createOwnerPassword, setCreateOwnerPassword] = useState("");
@@ -251,6 +311,7 @@ export function PlatformDashboardPage() {
   // Edit Gym Modal
   const [editingGym, setEditingGym] = useState<PlatformGymRow | null>(null);
   const [editName, setEditName] = useState("");
+  const [editSlug, setEditSlug] = useState("");
   const [editAddress, setEditAddress] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editCapacity, setEditCapacity] = useState("100");
@@ -261,16 +322,19 @@ export function PlatformDashboardPage() {
 
   // Edit Subscription Modal
   const [subModalGym, setSubModalGym] = useState<PlatformGymRow | null>(null);
-  const [subPlanTier, setSubPlanTier] = useState<"trial" | "starter" | "growth" | "enterprise">(
-    "trial",
-  );
+  const [subPlanCode, setSubPlanCode] = useState<string>("starter");
   const [subBillingStatus, setSubBillingStatus] = useState<
     "trialing" | "active" | "past_due" | "paused" | "canceled"
   >("trialing");
+  const [subPaymentStatus, setSubPaymentStatus] = useState<string>("paid");
   const [subBillingCycle, setSubBillingCycle] = useState<"monthly" | "annual" | "custom">(
     "monthly",
   );
+  const [subPriceAmount, setSubPriceAmount] = useState("");
+  const [subStartDate, setSubStartDate] = useState("");
   const [subRenewalDate, setSubRenewalDate] = useState("");
+  const [subGraceDays, setSubGraceDays] = useState("7");
+  const [subAutoSuspend, setSubAutoSuspend] = useState(true);
   const [subNotes, setSubNotes] = useState("");
   const [savingSub, setSavingSub] = useState(false);
 
@@ -347,7 +411,7 @@ export function PlatformDashboardPage() {
 
       const perms = new Set(gymsJson.admin.permissions);
 
-      const [cfgRes, actRes, supRes] = await Promise.all([
+      const [cfgRes, actRes, supRes, plansRes, payRes] = await Promise.all([
         perms.has("platform:config") || perms.has("gyms:read")
           ? fetch("/api/platform/config", { cache: "no-store" })
           : Promise.resolve(null),
@@ -356,6 +420,12 @@ export function PlatformDashboardPage() {
           : Promise.resolve(null),
         perms.has("platform:support") || perms.has("gyms:read")
           ? fetch("/api/platform/support", { cache: "no-store" })
+          : Promise.resolve(null),
+        perms.has("gyms:read")
+          ? fetch("/api/platform/plans", { cache: "no-store" })
+          : Promise.resolve(null),
+        perms.has("gyms:read")
+          ? fetch("/api/platform/payments", { cache: "no-store" })
           : Promise.resolve(null),
       ]);
 
@@ -390,6 +460,22 @@ export function PlatformDashboardPage() {
       if (supRes && supRes.ok) {
         const supJson = (await supRes.json()) as { items?: SupportItemRow[] };
         setSupportItems(supJson.items ?? []);
+      }
+
+      if (plansRes && plansRes.ok) {
+        const plansJson = (await plansRes.json()) as { plans?: SaasPlanRow[] };
+        setSaasPlans(plansJson.plans ?? []);
+      }
+
+      if (payRes && payRes.ok) {
+        const payJson = (await payRes.json()) as {
+          payments?: SaasPaymentRow[];
+          totals?: { totalCollected: number; collectedThisMonth: number };
+        };
+        setSaasPayments(payJson.payments ?? []);
+        if (payJson.totals) {
+          setPaymentTotals(payJson.totals);
+        }
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load platform data.");
@@ -491,13 +577,16 @@ export function PlatformDashboardPage() {
         body: JSON.stringify({
           action: "create-gym",
           name: createName,
+          slug: createSlug.trim() || undefined,
           address: createAddress,
           phone: createPhone,
-          subdomain: createSubdomain,
+          subdomain: createSubdomain || undefined,
           capacity: Number(createCapacity),
           timezone: createTimezone,
           status: createStatus,
-          planTier: createPlanTier,
+          planCode: createPlanCode,
+          expirationDate: createExpirationDate || undefined,
+          gracePeriodDays: Number(createGraceDays || 7),
           ...(createOwnerName || createOwnerEmail || createOwnerPassword
             ? {
                 ownerName: createOwnerName,
@@ -509,7 +598,7 @@ export function PlatformDashboardPage() {
       });
       const data = (await res.json()) as {
         error?: string;
-        gym?: { name: string };
+        gym?: { name: string; slug?: string };
         ownerInviteCode?: string | null;
       };
       if (!res.ok || !data.gym) {
@@ -520,13 +609,19 @@ export function PlatformDashboardPage() {
       }
       setShowCreateGym(false);
       setCreateName("");
+      setCreateSlug("");
       setCreateAddress("");
       setCreatePhone("");
       setCreateSubdomain("");
+      setCreateExpirationDate("");
       setCreateOwnerName("");
       setCreateOwnerEmail("");
       setCreateOwnerPassword("");
-      showToast(`Provisioned gym workspace "${data.gym.name}".`);
+      showToast(
+        `Provisioned gym workspace "${data.gym.name}"${
+          data.gym.slug ? ` at /gym/${data.gym.slug}` : ""
+        }.`,
+      );
       await loadConsoleData();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Unable to provision gym workspace.");
@@ -538,6 +633,7 @@ export function PlatformDashboardPage() {
   function openEditGymModal(gym: PlatformGymRow) {
     setEditingGym(gym);
     setEditName(gym.name);
+    setEditSlug(gym.slug);
     setEditAddress(gym.address);
     setEditPhone(gym.phone);
     setEditCapacity(String(gym.capacity));
@@ -559,6 +655,7 @@ export function PlatformDashboardPage() {
           action: "update-gym",
           gymId: editingGym.id,
           name: editName,
+          slug: editSlug,
           address: editAddress,
           phone: editPhone,
           capacity: Number(editCapacity),
@@ -581,14 +678,26 @@ export function PlatformDashboardPage() {
 
   function openSubscriptionModal(gym: PlatformGymRow) {
     setSubModalGym(gym);
-    setSubPlanTier(gym.platformSubscription.planTier);
+    setSubPlanCode(gym.platformSubscription.planCode || gym.platformSubscription.planTier);
     setSubBillingStatus(gym.platformSubscription.billingStatus);
+    setSubPaymentStatus(
+      gym.platformSubscription.paymentStatus ||
+        (gym.platformSubscription.billingStatus === "active" ? "paid" : "trialing"),
+    );
     setSubBillingCycle(gym.platformSubscription.billingCycle);
-    setSubRenewalDate(
-      gym.platformSubscription.renewalDate
-        ? gym.platformSubscription.renewalDate.slice(0, 10)
+    setSubPriceAmount(
+      gym.platformSubscription.priceAmount !== undefined
+        ? String(gym.platformSubscription.priceAmount)
         : "",
     );
+    setSubStartDate(
+      gym.platformSubscription.startDate ? gym.platformSubscription.startDate.slice(0, 10) : "",
+    );
+    const expiryIso =
+      gym.platformSubscription.expirationDate || gym.platformSubscription.renewalDate;
+    setSubRenewalDate(expiryIso ? expiryIso.slice(0, 10) : "");
+    setSubGraceDays(String(gym.platformSubscription.gracePeriodDays ?? 7));
+    setSubAutoSuspend(gym.platformSubscription.autoSuspendOnExpire !== false);
     setSubNotes(gym.platformSubscription.notes);
   }
 
@@ -604,16 +713,25 @@ export function PlatformDashboardPage() {
         body: JSON.stringify({
           action: "update-subscription",
           gymId: subModalGym.id,
-          planTier: subPlanTier,
+          planCode: subPlanCode,
+          planTier: ["trial", "starter", "growth", "enterprise"].includes(subPlanCode)
+            ? subPlanCode
+            : undefined,
           billingStatus: subBillingStatus,
+          paymentStatus: subPaymentStatus,
           billingCycle: subBillingCycle,
+          priceAmount: subPriceAmount !== "" ? Number(subPriceAmount) : undefined,
+          startDate: subStartDate,
+          expirationDate: subRenewalDate,
           renewalDate: subRenewalDate,
+          gracePeriodDays: Number(subGraceDays || 0),
+          autoSuspendOnExpire: subAutoSuspend,
           notes: subNotes,
         }),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Unable to save subscription record.");
-      showToast(`Updated manual subscription record for "${subModalGym.name}".`);
+      showToast(`Updated subscription & grace period for "${subModalGym.name}".`);
       setSubModalGym(null);
       await loadConsoleData();
     } catch (err) {
@@ -742,17 +860,25 @@ export function PlatformDashboardPage() {
   const filteredGyms = useMemo(() => {
     const q = gymSearch.trim().toLowerCase();
     return gyms.filter((gym) => {
-      if (gymStatusFilter !== "all" && gym.status !== gymStatusFilter) return false;
+      if (gymStatusFilter === "expired") {
+        if (!gym.platformSubscription.isExpired) return false;
+      } else if (gymStatusFilter !== "all" && gym.status !== gymStatusFilter) {
+        return false;
+      }
+      const pCode = gym.platformSubscription.planCode || gym.platformSubscription.planTier;
+      if (gymPlanFilter !== "all" && pCode !== gymPlanFilter) return false;
       if (!q) return true;
       return (
         gym.name.toLowerCase().includes(q) ||
         gym.slug.toLowerCase().includes(q) ||
         gym.subdomain.toLowerCase().includes(q) ||
+        (gym.phone ?? "").toLowerCase().includes(q) ||
         (gym.customDomain ?? "").toLowerCase().includes(q) ||
-        (gym.owner?.email ?? "").toLowerCase().includes(q)
+        (gym.owner?.email ?? "").toLowerCase().includes(q) ||
+        (gym.owner?.name ?? "").toLowerCase().includes(q)
       );
     });
-  }, [gyms, gymSearch, gymStatusFilter]);
+  }, [gyms, gymSearch, gymStatusFilter, gymPlanFilter]);
 
   const filteredSupport = useMemo(() => {
     return supportItems.filter((item) =>
@@ -792,14 +918,15 @@ export function PlatformDashboardPage() {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-[16px] font-semibold tracking-[-0.02em] text-white">
-                  GymOS Control Plane
+                  Leeloo Connect — Super Admin
                 </span>
                 <span className="rounded-full border border-indigo-400/30 bg-indigo-500/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-300">
                   {admin?.role.replace("_", " ")}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Platform-level tenant governance · Isolated from individual gym staff operations
+                Multi-gym SaaS control plane · Individual clubs operate under{" "}
+                <span className="font-mono text-slate-300">/gym/&lt;slug&gt;</span>
               </p>
             </div>
           </div>
@@ -842,10 +969,20 @@ export function PlatformDashboardPage() {
           >
             {(
               [
-                { id: "overview", label: "Overview & Stats", icon: Activity },
-                { id: "gyms", label: `Gyms & Subscriptions (${gyms.length})`, icon: Building2 },
-                { id: "config", label: "Platform Configuration", icon: Sliders },
-                { id: "activity", label: "System Activity & Audit", icon: Settings },
+                { id: "overview", label: "Overview", icon: Activity },
+                { id: "gyms", label: `Gyms (${gyms.length})`, icon: Building2 },
+                {
+                  id: "subscriptions",
+                  label: `Subscriptions & Payments`,
+                  icon: CreditCard,
+                },
+                {
+                  id: "plans",
+                  label: `Plans & Pricing (${saasPlans.length || 4})`,
+                  icon: Tag,
+                },
+                { id: "config", label: "Platform Config", icon: Sliders },
+                { id: "activity", label: "Audit & Activity", icon: Settings },
                 {
                   id: "support",
                   label: `Support (${supportItems.filter((i) => i.status !== "resolved").length})`,
@@ -941,53 +1078,73 @@ export function PlatformDashboardPage() {
           <div className="space-y-6">
             {summary ? (
               <>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                   <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
-                    <p className="text-xs font-medium text-slate-500">Registered Gyms</p>
+                    <p className="text-xs font-medium text-slate-500">Total Registered Gyms</p>
                     <p className="mt-2 text-3xl font-bold text-slate-900">{summary.totalGyms}</p>
                     <p className="mt-2 text-[11px] text-slate-600">
-                      <span className="font-semibold text-emerald-700">
-                        {summary.activeGyms} active
-                      </span>{" "}
-                      ·{" "}
-                      <span className="font-semibold text-amber-700">
-                        {summary.pendingGyms} pending
-                      </span>{" "}
-                      ·{" "}
-                      <span className="font-semibold text-rose-700">
-                        {summary.suspendedGyms} suspended
-                      </span>
+                      {summary.pendingGyms} pending approval
                     </p>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
-                    <p className="text-xs font-medium text-slate-500">Platform Members</p>
-                    <p className="mt-2 text-3xl font-bold text-slate-900">
-                      {summary.totalEnrolledMembers + summary.unaffiliatedMobileMembers}
-                    </p>
+                    <p className="text-xs font-medium text-slate-500">Active Gyms</p>
+                    <p className="mt-2 text-3xl font-bold text-emerald-700">{summary.activeGyms}</p>
                     <p className="mt-2 text-[11px] text-slate-600">
-                      {summary.totalEnrolledMembers} enrolled in gyms ·{" "}
-                      {summary.unaffiliatedMobileMembers} unaffiliated mobile
+                      {summary.checkInsLast24h} check-ins in last 24h
                     </p>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
-                    <p className="text-xs font-medium text-slate-500">Staff &amp; Coaches</p>
-                    <p className="mt-2 text-3xl font-bold text-slate-900">
-                      {summary.totalStaffUsers + summary.totalTrainers}
+                    <p className="text-xs font-medium text-slate-500">Suspended Gyms</p>
+                    <p className="mt-2 text-3xl font-bold text-rose-700">
+                      {summary.suspendedGyms}
                     </p>
                     <p className="mt-2 text-[11px] text-slate-600">
-                      {summary.totalStaffUsers} gym owners/staff · {summary.totalTrainers} coaches
+                      Access blocked at gateway
                     </p>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
-                    <p className="text-xs font-medium text-slate-500">Live Operations</p>
-                    <p className="mt-2 text-3xl font-bold text-slate-900">
-                      {summary.activeMemberSubscriptions}
+                    <p className="text-xs font-medium text-slate-500">Expired Subscriptions</p>
+                    <p className="mt-2 text-3xl font-bold text-amber-700">
+                      {summary.expiredSubscriptions ?? 0}
                     </p>
                     <p className="mt-2 text-[11px] text-slate-600">
-                      Active member plans · {summary.checkInsLast24h} check-ins (24h)
+                      {summary.gracePeriodGyms ?? 0} currently in grace period
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
+                    <p className="text-xs font-medium text-slate-500">Total Members</p>
+                    <p className="mt-2 text-3xl font-bold text-slate-900">
+                      {summary.totalMembersAll ??
+                        summary.totalEnrolledMembers + summary.unaffiliatedMobileMembers}
+                    </p>
+                    <p className="mt-2 text-[11px] text-slate-600">
+                      {summary.totalEnrolledMembers} enrolled · {summary.unaffiliatedMobileMembers}{" "}
+                      mobile
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-2xs">
+                    <p className="text-xs font-semibold text-indigo-900">
+                      Monthly Recurring Revenue
+                    </p>
+                    <p className="mt-2 text-2xl font-bold text-indigo-950">
+                      {new Intl.NumberFormat("en-EG", {
+                        style: "currency",
+                        currency: "EGP",
+                        maximumFractionDigits: 0,
+                      }).format(summary.monthlyRecurringRevenue ?? 0)}
+                    </p>
+                    <p className="mt-2 text-[11px] text-indigo-800">
+                      Collected:{" "}
+                      {new Intl.NumberFormat("en-EG", {
+                        style: "currency",
+                        currency: "EGP",
+                        maximumFractionDigits: 0,
+                      }).format(summary.totalSaasRevenueCollected ?? 0)}
                     </p>
                   </div>
                 </div>
@@ -1179,7 +1336,7 @@ export function PlatformDashboardPage() {
                   />
                 </div>
                 <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
-                  {(["all", "active", "pending", "suspended"] as const).map((st) => (
+                  {(["all", "active", "pending", "suspended", "expired"] as const).map((st) => (
                     <button
                       key={st}
                       type="button"
@@ -1194,6 +1351,19 @@ export function PlatformDashboardPage() {
                     </button>
                   ))}
                 </div>
+                <select
+                  aria-label="Filter by SaaS plan"
+                  value={gymPlanFilter}
+                  onChange={(e) => setGymPlanFilter(e.target.value)}
+                  className="h-9 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700"
+                >
+                  <option value="all">All Plans</option>
+                  {saasPlans.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {canWriteGyms && (
@@ -1233,17 +1403,55 @@ export function PlatformDashboardPage() {
                   </button>
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-4">
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium text-slate-700">Gym Name</span>
                     <input
                       required
                       maxLength={100}
                       value={createName}
-                      onChange={(e) => setCreateName(e.target.value)}
-                      placeholder="e.g. Apex Strength Club"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCreateName(val);
+                        if (!createSlug) {
+                          // Preview auto-slug naturally
+                        }
+                      }}
+                      placeholder="e.g. Iron House"
                       className="h-10 w-full rounded-xl border border-slate-300 px-3 text-xs"
                     />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-slate-700">
+                      Workspace URL Slug
+                    </span>
+                    <div className="flex h-10 overflow-hidden rounded-xl border border-slate-300">
+                      <span className="flex items-center border-r border-slate-200 bg-slate-50 px-2 font-mono text-[11px] text-slate-500">
+                        /gym/
+                      </span>
+                      <input
+                        maxLength={64}
+                        value={createSlug}
+                        onChange={(e) =>
+                          setCreateSlug(
+                            e.target.value
+                              .toLowerCase()
+                              .replace(/[^a-z0-9-]/g, "")
+                              .replace(/-+/g, "-"),
+                          )
+                        }
+                        placeholder={
+                          createName
+                            ? createName
+                                .trim()
+                                .toLowerCase()
+                                .replace(/[^a-z0-9]+/g, "-")
+                                .replace(/^-+|-+$/g, "") || "auto-slug"
+                            : "auto-slug"
+                        }
+                        className="min-w-0 flex-1 px-2.5 font-mono text-xs outline-none"
+                      />
+                    </div>
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium text-slate-700">
@@ -1274,24 +1482,51 @@ export function PlatformDashboardPage() {
                 <div className="grid gap-4 sm:grid-cols-6">
                   <label className="block sm:col-span-2">
                     <span className="mb-1 block text-xs font-medium text-slate-700">
-                      Subdomain (Optional)
+                      SaaS Subscription Plan
                     </span>
-                    <div className="flex h-10 overflow-hidden rounded-xl border border-slate-300">
-                      <input
-                        maxLength={48}
-                        value={createSubdomain}
-                        onChange={(e) =>
-                          setCreateSubdomain(
-                            e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
-                          )
-                        }
-                        placeholder="auto-generated"
-                        className="min-w-0 flex-1 px-3 font-mono text-xs outline-none"
-                      />
-                      <span className="flex items-center border-l border-slate-200 bg-slate-50 px-2.5 font-mono text-[11px] text-slate-500">
-                        .{baseDomain}
-                      </span>
-                    </div>
+                    <select
+                      value={createPlanCode}
+                      onChange={(e) => setCreatePlanCode(e.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs"
+                    >
+                      {(saasPlans.length > 0
+                        ? saasPlans.filter((p) => p.isActive)
+                        : [
+                            { code: "trial", name: "Free Trial", monthlyPrice: 0 },
+                            { code: "starter", name: "Starter Club", monthlyPrice: 1800 },
+                            { code: "growth", name: "Growth Pro", monthlyPrice: 3800 },
+                            { code: "enterprise", name: "Enterprise Unlimited", monthlyPrice: 7500 },
+                          ]
+                      ).map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.name} ({p.monthlyPrice} EGP/mo)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-slate-700">
+                      Expiration Date
+                    </span>
+                    <input
+                      type="date"
+                      value={createExpirationDate}
+                      onChange={(e) => setCreateExpirationDate(e.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-300 px-2.5 text-xs"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium text-slate-700">
+                      Grace (Days)
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={90}
+                      value={createGraceDays}
+                      onChange={(e) => setCreateGraceDays(e.target.value)}
+                      className="h-10 w-full rounded-xl border border-slate-300 px-3 text-xs"
+                    />
                   </label>
                   <label className="block">
                     <span className="mb-1 block text-xs font-medium text-slate-700">Capacity</span>
@@ -1306,20 +1541,6 @@ export function PlatformDashboardPage() {
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-slate-700">Timezone</span>
-                    <select
-                      value={createTimezone}
-                      onChange={(e) => setCreateTimezone(e.target.value)}
-                      className="h-10 w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs"
-                    >
-                      {COMMON_TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz}>
-                          {tz}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
                     <span className="mb-1 block text-xs font-medium text-slate-700">
                       Initial Status
                     </span>
@@ -1330,23 +1551,6 @@ export function PlatformDashboardPage() {
                     >
                       <option value="active">Active</option>
                       <option value="pending">Pending Approval</option>
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-slate-700">SaaS Tier</span>
-                    <select
-                      value={createPlanTier}
-                      onChange={(e) =>
-                        setCreatePlanTier(
-                          e.target.value as "trial" | "starter" | "growth" | "enterprise",
-                        )
-                      }
-                      className="h-10 w-full rounded-xl border border-slate-300 bg-white px-2.5 text-xs"
-                    >
-                      <option value="trial">Trial</option>
-                      <option value="starter">Starter</option>
-                      <option value="growth">Growth</option>
-                      <option value="enterprise">Enterprise</option>
                     </select>
                   </label>
                 </div>
@@ -1404,7 +1608,7 @@ export function PlatformDashboardPage() {
             {/* Gyms Table */}
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] text-left text-xs">
+                <table className="w-full min-w-[980px] text-start text-xs">
                   <thead className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                     <tr>
                       <th className="px-4 py-3.5">Gym &amp; Domains</th>
@@ -1412,7 +1616,7 @@ export function PlatformDashboardPage() {
                       <th className="px-4 py-3.5">Status</th>
                       <th className="px-4 py-3.5">SaaS Subscription (Manual)</th>
                       <th className="px-4 py-3.5">Usage</th>
-                      <th className="px-4 py-3.5 text-right">Actions</th>
+                      <th className="px-4 py-3.5 text-end">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1426,17 +1630,28 @@ export function PlatformDashboardPage() {
                       filteredGyms.map((gym) => (
                         <tr key={gym.id} className="hover:bg-slate-50/70">
                           <td className="px-4 py-3.5">
-                            <p className="font-semibold text-slate-900">{gym.name}</p>
-                            <p className="mt-0.5 flex items-center gap-1 font-mono text-[11px] text-indigo-700">
-                              <Globe size={11} />
-                              {gym.subdomain}.{baseDomain}
+                            <button
+                              type="button"
+                              onClick={() => setDetailGymId(gym.id)}
+                              className="text-start font-semibold text-slate-900 hover:text-indigo-600"
+                            >
+                              {gym.name}
+                            </button>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                              <a
+                                href={gym.workspacePath || `/gym/${gym.slug}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-indigo-700 hover:underline"
+                              >
+                                <Globe size={11} />
+                                /gym/{gym.slug}
+                                <ExternalLink size={10} />
+                              </a>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-500">
+                              {gym.address} · {gym.phone}
                             </p>
-                            {gym.customDomain && (
-                              <p className="mt-0.5 font-mono text-[10px] text-slate-500">
-                                Custom: {gym.customDomain}
-                              </p>
-                            )}
-                            <p className="mt-0.5 text-[11px] text-slate-500">{gym.address}</p>
                           </td>
 
                           <td className="px-4 py-3.5">
@@ -1470,26 +1685,36 @@ export function PlatformDashboardPage() {
                           </td>
 
                           <td className="px-4 py-3.5">
-                            <div className="flex items-center gap-1.5">
-                              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-800">
-                                {gym.platformSubscription.planTier}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-800">
+                                {gym.platformSubscription.planName ||
+                                  gym.platformSubscription.planTier.toUpperCase()}
                               </span>
                               <span
                                 className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
-                                  gym.platformSubscription.billingStatus === "active"
-                                    ? "bg-emerald-50 text-emerald-700"
-                                    : gym.platformSubscription.billingStatus === "trialing"
-                                      ? "bg-sky-50 text-sky-700"
-                                      : gym.platformSubscription.billingStatus === "past_due"
-                                        ? "bg-amber-50 text-amber-700"
-                                        : "bg-slate-100 text-slate-600"
+                                  gym.platformSubscription.isExpired
+                                    ? "bg-rose-100 text-rose-800"
+                                    : gym.platformSubscription.inGracePeriod
+                                      ? "bg-amber-100 text-amber-800"
+                                      : gym.platformSubscription.billingStatus === "active"
+                                        ? "bg-emerald-50 text-emerald-700"
+                                        : gym.platformSubscription.billingStatus === "trialing"
+                                          ? "bg-sky-50 text-sky-700"
+                                          : "bg-slate-100 text-slate-600"
                                 }`}
                               >
-                                {gym.platformSubscription.billingStatus.replace("_", " ")}
+                                {(
+                                  gym.platformSubscription.lifecycleState ||
+                                  gym.platformSubscription.billingStatus
+                                ).replace("_", " ")}
                               </span>
                             </div>
                             <p className="mt-1 text-[10px] text-slate-500">
-                              Renewal: {formatShortDate(gym.platformSubscription.renewalDate)}
+                              Expires:{" "}
+                              {formatShortDate(
+                                gym.platformSubscription.expirationDate ??
+                                  gym.platformSubscription.renewalDate,
+                              )}
                             </p>
                           </td>
 
@@ -1500,62 +1725,88 @@ export function PlatformDashboardPage() {
                             </p>
                           </td>
 
-                          <td className="px-4 py-3.5 text-right">
-                            {canWriteGyms ? (
-                              <div className="inline-flex flex-wrap justify-end gap-1.5">
-                                {gym.status !== "active" ? (
+                          <td className="px-4 py-3.5 text-end">
+                            <div className="inline-flex flex-wrap justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setDetailGymId(gym.id)}
+                                className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                <Eye size={12} />
+                                Details
+                              </button>
+                              <a
+                                href={gym.workspacePath || `/gym/${gym.slug}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                              >
+                                Open
+                                <ExternalLink size={11} />
+                              </a>
+                              {canWriteGyms && (
+                                <>
+                                  {gym.status !== "active" ? (
+                                    <button
+                                      type="button"
+                                      disabled={busyGymId === gym.id}
+                                      onClick={() => void handleSetGymStatus(gym, "active")}
+                                      className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-emerald-600 px-2.5 text-[11px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                                    >
+                                      <PlayCircle size={12} />
+                                      {gym.status === "pending" ? "Approve" : "Activate"}
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={busyGymId === gym.id}
+                                      onClick={() => void handleSetGymStatus(gym, "suspended")}
+                                      className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                                    >
+                                      <PauseCircle size={12} />
+                                      Suspend
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditGymModal(gym)}
+                                    className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <Edit3 size={12} />
+                                    Edit
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => setRecordPaymentGymId(gym.id)}
+                                    className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                                  >
+                                    <CreditCard size={12} />
+                                    Payment
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => openSubscriptionModal(gym)}
+                                    className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Plan
+                                  </button>
+
                                   <button
                                     type="button"
                                     disabled={busyGymId === gym.id}
-                                    onClick={() => void handleSetGymStatus(gym, "active")}
-                                    className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-emerald-600 px-2.5 text-[11px] font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                                    onClick={() => void handleIssueOwnerInvite(gym)}
+                                    title="Generate one-time Owner Invite Code"
+                                    className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
                                   >
-                                    <PlayCircle size={12} />
-                                    {gym.status === "pending" ? "Approve" : "Activate"}
+                                    <KeyRound size={12} />
+                                    Owner Code
                                   </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={busyGymId === gym.id}
-                                    onClick={() => void handleSetGymStatus(gym, "suspended")}
-                                    className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                                  >
-                                    <PauseCircle size={12} />
-                                    Suspend
-                                  </button>
-                                )}
-
-                                <button
-                                  type="button"
-                                  onClick={() => openEditGymModal(gym)}
-                                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                                >
-                                  <Edit3 size={12} />
-                                  Edit
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => openSubscriptionModal(gym)}
-                                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                                >
-                                  Plan
-                                </button>
-
-                                <button
-                                  type="button"
-                                  disabled={busyGymId === gym.id}
-                                  onClick={() => void handleIssueOwnerInvite(gym)}
-                                  title="Generate one-time Owner Invite Code"
-                                  className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                                >
-                                  <KeyRound size={12} />
-                                  Owner Code
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-[11px] text-slate-400">Read-only</span>
-                            )}
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1565,6 +1816,66 @@ export function PlatformDashboardPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* TAB 2B: SUBSCRIPTIONS & MANUAL PAYMENTS */}
+        {activeTab === "subscriptions" && (
+          <SuperAdminSubscriptionsTab
+            gyms={gyms.map((g) => ({
+              id: g.id,
+              name: g.name,
+              slug: g.slug,
+              workspacePath: g.workspacePath || `/gym/${g.slug}`,
+              status: g.status,
+              currency: g.currency,
+              platformSubscription: {
+                planId: g.platformSubscription.planId,
+                planCode: g.platformSubscription.planCode,
+                planName: g.platformSubscription.planName,
+                planTier: g.platformSubscription.planTier,
+                billingStatus: g.platformSubscription.billingStatus,
+                paymentStatus: g.platformSubscription.paymentStatus,
+                billingCycle: g.platformSubscription.billingCycle,
+                priceAmount: g.platformSubscription.priceAmount,
+                monthlyRecurringAmount: g.platformSubscription.monthlyRecurringAmount,
+                startDate: g.platformSubscription.startDate,
+                expirationDate: g.platformSubscription.expirationDate,
+                renewalDate: g.platformSubscription.renewalDate,
+                gracePeriodDays: g.platformSubscription.gracePeriodDays,
+                lifecycleState: g.platformSubscription.lifecycleState,
+                inGracePeriod: g.platformSubscription.inGracePeriod,
+                isExpired: g.platformSubscription.isExpired,
+                accessAllowed: g.platformSubscription.accessAllowed,
+                notes: g.platformSubscription.notes,
+              },
+            }))}
+            payments={saasPayments}
+            totalCollected={paymentTotals.totalCollected}
+            collectedThisMonth={paymentTotals.collectedThisMonth}
+            mrr={summary?.monthlyRecurringRevenue ?? 0}
+            canWrite={Boolean(canWriteGyms)}
+            onOpenRecordPayment={(gId) => setRecordPaymentGymId(gId || gyms[0]?.id || "new")}
+            onOpenManageSubscription={(id: string) => {
+              const found = gyms.find((x) => x.id === id);
+              if (found) openSubscriptionModal(found);
+            }}
+            onOpenGymDetails={(id: string) => setDetailGymId(id)}
+            onToggleGymStatus={async (id: string, nextStatus: "active" | "suspended") => {
+              const found = gyms.find((x) => x.id === id);
+              if (found) await handleSetGymStatus(found, nextStatus);
+            }}
+          />
+        )}
+
+        {/* TAB 2C: PLANS & PRICING */}
+        {activeTab === "plans" && (
+          <SuperAdminPlansTab
+            plans={saasPlans}
+            canWrite={Boolean(canWriteGyms)}
+            onRefresh={loadConsoleData}
+            onToast={showToast}
+            onError={setErrorMsg}
+          />
         )}
 
         {/* TAB 3: PLATFORM CONFIGURATION */}
@@ -2146,15 +2457,35 @@ export function PlatformDashboardPage() {
               </button>
             </div>
 
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-slate-700">Gym Name</span>
-              <input
-                required
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                className="h-10 w-full rounded-xl border border-slate-300 px-3 text-xs"
-              />
-            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-700">Gym Name</span>
+                <input
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="h-10 w-full rounded-xl border border-slate-300 px-3 text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-700">
+                  Workspace Slug (/gym/&lt;slug&gt;)
+                </span>
+                <input
+                  required
+                  value={editSlug}
+                  onChange={(e) =>
+                    setEditSlug(
+                      e.target.value
+                        .toLowerCase()
+                        .replace(/[^a-z0-9-]/g, "")
+                        .replace(/-+/g, "-"),
+                    )
+                  }
+                  className="h-10 w-full rounded-xl border border-slate-300 px-3 font-mono text-xs"
+                />
+              </label>
+            </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
@@ -2277,25 +2608,31 @@ export function PlatformDashboardPage() {
             </div>
 
             <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-900">
-              Manual platform billing record only. External payment processing is not connected.
+              Manual SaaS subscription governance. No live payment gateway is connected — use{" "}
+              <strong>Record Payment</strong> to log receipts and extend renewal dates.
             </p>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-700">Plan Tier</span>
+                <span className="mb-1 block text-xs font-medium text-slate-700">SaaS Plan</span>
                 <select
-                  value={subPlanTier}
-                  onChange={(e) =>
-                    setSubPlanTier(
-                      e.target.value as "trial" | "starter" | "growth" | "enterprise",
-                    )
-                  }
+                  value={subPlanCode}
+                  onChange={(e) => setSubPlanCode(e.target.value)}
                   className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs"
                 >
-                  <option value="trial">Trial</option>
-                  <option value="starter">Starter</option>
-                  <option value="growth">Growth</option>
-                  <option value="enterprise">Enterprise</option>
+                  {(saasPlans.length > 0
+                    ? saasPlans
+                    : [
+                        { code: "trial", name: "Free Trial" },
+                        { code: "starter", name: "Starter Club" },
+                        { code: "growth", name: "Growth Pro" },
+                        { code: "enterprise", name: "Enterprise Unlimited" },
+                      ]
+                  ).map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.name}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -2326,7 +2663,7 @@ export function PlatformDashboardPage() {
               </label>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-700">Billing Cycle</span>
                 <select
@@ -2338,22 +2675,89 @@ export function PlatformDashboardPage() {
                 >
                   <option value="monthly">Monthly</option>
                   <option value="annual">Annual</option>
-                  <option value="custom">Custom Agreement</option>
+                  <option value="custom">Custom</option>
                 </select>
               </label>
 
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-slate-700">
-                  Renewal / Trial End Date
+                  Payment Status
+                </span>
+                <select
+                  value={subPaymentStatus}
+                  onChange={(e) => setSubPaymentStatus(e.target.value)}
+                  className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs"
+                >
+                  <option value="paid">Paid</option>
+                  <option value="trialing">Trialing</option>
+                  <option value="pending">Pending</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="waived">Waived</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-700">
+                  Cycle Price (EGP)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={subPriceAmount}
+                  onChange={(e) => setSubPriceAmount(e.target.value)}
+                  placeholder="Plan default"
+                  className="h-10 w-full rounded-xl border border-slate-300 px-3 text-xs"
+                />
+              </label>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-700">Start Date</span>
+                <input
+                  type="date"
+                  value={subStartDate}
+                  onChange={(e) => setSubStartDate(e.target.value)}
+                  className="h-10 w-full rounded-xl border border-slate-300 px-2.5 text-xs"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-700">
+                  Expiration Date
                 </span>
                 <input
                   type="date"
                   value={subRenewalDate}
                   onChange={(e) => setSubRenewalDate(e.target.value)}
+                  className="h-10 w-full rounded-xl border border-slate-300 px-2.5 text-xs"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-700">
+                  Grace Period (Days)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={90}
+                  value={subGraceDays}
+                  onChange={(e) => setSubGraceDays(e.target.value)}
                   className="h-10 w-full rounded-xl border border-slate-300 px-3 text-xs"
                 />
               </label>
             </div>
+
+            <label className="flex items-center gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={subAutoSuspend}
+                onChange={(e) => setSubAutoSuspend(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Restrict gym access automatically after expiration + grace period elapses
+            </label>
 
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-slate-700">
@@ -2389,6 +2793,67 @@ export function PlatformDashboardPage() {
           </form>
         </div>
       )}
+
+      {/* Individual Gym Details Slide-Over Drawer */}
+      <SuperAdminGymDetailsModal
+        gymId={detailGymId}
+        canWrite={Boolean(canWriteGyms)}
+        onClose={() => setDetailGymId(null)}
+        onOpenRecordPayment={(gId: string) => {
+          setDetailGymId(null);
+          setRecordPaymentGymId(gId);
+        }}
+        onOpenManageSubscription={(gId: string) => {
+          setDetailGymId(null);
+          const found = gyms.find((x) => x.id === gId);
+          if (found) openSubscriptionModal(found);
+        }}
+        onToggleStatus={async (gId: string, nextStatus: "active" | "suspended") => {
+          const found = gyms.find((x) => x.id === gId);
+          if (found) await handleSetGymStatus(found, nextStatus);
+        }}
+      />
+
+      {/* Global Record Manual Payment Modal */}
+      <RecordSaasPaymentModal
+        open={Boolean(recordPaymentGymId)}
+        gyms={gyms.map((g) => ({
+          id: g.id,
+          name: g.name,
+          slug: g.slug,
+          workspacePath: g.workspacePath || `/gym/${g.slug}`,
+          status: g.status,
+          currency: g.currency,
+          platformSubscription: {
+            planId: g.platformSubscription.planId,
+            planCode: g.platformSubscription.planCode,
+            planName: g.platformSubscription.planName,
+            planTier: g.platformSubscription.planTier,
+            billingStatus: g.platformSubscription.billingStatus,
+            paymentStatus: g.platformSubscription.paymentStatus,
+            billingCycle: g.platformSubscription.billingCycle,
+            priceAmount: g.platformSubscription.priceAmount,
+            monthlyRecurringAmount: g.platformSubscription.monthlyRecurringAmount,
+            startDate: g.platformSubscription.startDate,
+            expirationDate: g.platformSubscription.expirationDate,
+            renewalDate: g.platformSubscription.renewalDate,
+            gracePeriodDays: g.platformSubscription.gracePeriodDays,
+            lifecycleState: g.platformSubscription.lifecycleState,
+            inGracePeriod: g.platformSubscription.inGracePeriod,
+            isExpired: g.platformSubscription.isExpired,
+            accessAllowed: g.platformSubscription.accessAllowed,
+            notes: g.platformSubscription.notes,
+          },
+        }))}
+        plans={saasPlans}
+        initialGymId={recordPaymentGymId && recordPaymentGymId !== "new" ? recordPaymentGymId : ""}
+        onClose={() => setRecordPaymentGymId(null)}
+        onSuccess={async (msg: string) => {
+          showToast(msg);
+          await loadConsoleData();
+        }}
+        onError={setErrorMsg}
+      />
     </div>
   );
 }

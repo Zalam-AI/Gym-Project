@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarPlus,
   Check,
   CheckCircle2,
@@ -10,6 +12,7 @@ import {
   Copy,
   Dumbbell,
   KeyRound,
+  Pencil,
   Plus,
   RefreshCw,
   Smartphone,
@@ -28,12 +31,17 @@ type Exercise = {
   reps: string;
   rest: string;
   muscle: string;
+  day?: string;
+  targetWeightKg?: number;
 };
 
 type WorkoutPlan = {
   id: string;
   title: string;
   goal: string;
+  scheduledDays?: string[];
+  createdByRole?: "staff" | "trainer";
+  createdByName?: string;
   exercises: Exercise[];
   assignedMemberIds: string[];
   assignedMemberNames: string[];
@@ -114,6 +122,42 @@ const muscleGroups = [
   "Core",
   "Full body",
   "Cardio",
+];
+const PLAN_WEEK_DAYS = ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"] as const;
+const QUICK_LIBRARY_EXERCISES: Array<{
+  name: string;
+  muscle: string;
+  sets: string;
+  reps: string;
+  rest: string;
+}> = [
+  { name: "Barbell Bench Press", muscle: "Chest", sets: "4", reps: "6-8", rest: "90 sec" },
+  { name: "Incline Dumbbell Press", muscle: "Chest", sets: "3", reps: "8-10", rest: "90 sec" },
+  { name: "Cable Chest Fly", muscle: "Chest", sets: "3", reps: "12-15", rest: "60 sec" },
+  { name: "Push-Ups", muscle: "Chest", sets: "3", reps: "12-15", rest: "60 sec" },
+  { name: "Barbell Back Squat", muscle: "Legs", sets: "4", reps: "6-8", rest: "120 sec" },
+  { name: "Goblet Squat", muscle: "Legs", sets: "3", reps: "10-12", rest: "75 sec" },
+  { name: "Leg Press", muscle: "Legs", sets: "4", reps: "10-12", rest: "90 sec" },
+  { name: "Deadlift", muscle: "Back", sets: "3", reps: "5", rest: "120 sec" },
+  { name: "Romanian Deadlift", muscle: "Legs", sets: "3", reps: "8-10", rest: "90 sec" },
+  { name: "Lat Pulldown", muscle: "Back", sets: "3", reps: "10-12", rest: "75 sec" },
+  { name: "Pull-Ups", muscle: "Back", sets: "3", reps: "8-10", rest: "90 sec" },
+  { name: "Seated Cable Row", muscle: "Back", sets: "3", reps: "10-12", rest: "75 sec" },
+  { name: "Bent-Over Barbell Row", muscle: "Back", sets: "4", reps: "8-10", rest: "90 sec" },
+  { name: "Overhead Barbell Press", muscle: "Shoulders", sets: "3", reps: "6-8", rest: "90 sec" },
+  { name: "Seated Dumbbell Shoulder Press", muscle: "Shoulders", sets: "3", reps: "8-10", rest: "75 sec" },
+  { name: "Dumbbell Lateral Raise", muscle: "Shoulders", sets: "3", reps: "12-15", rest: "60 sec" },
+  { name: "Face Pull", muscle: "Shoulders", sets: "3", reps: "12-15", rest: "60 sec" },
+  { name: "Barbell Bicep Curl", muscle: "Arms", sets: "3", reps: "10-12", rest: "60 sec" },
+  { name: "Hammer Curl", muscle: "Arms", sets: "3", reps: "10-12", rest: "60 sec" },
+  { name: "Tricep Rope Pushdown", muscle: "Arms", sets: "3", reps: "12-15", rest: "60 sec" },
+  { name: "Overhead Tricep Extension", muscle: "Arms", sets: "3", reps: "10-12", rest: "60 sec" },
+  { name: "Walking Lunges", muscle: "Legs", sets: "3", reps: "10-12", rest: "75 sec" },
+  { name: "Barbell Hip Thrust", muscle: "Legs", sets: "3", reps: "8-12", rest: "90 sec" },
+  { name: "Seated Leg Curl", muscle: "Legs", sets: "3", reps: "10-12", rest: "60 sec" },
+  { name: "Standing Calf Raise", muscle: "Legs", sets: "4", reps: "12-15", rest: "45 sec" },
+  { name: "Plank", muscle: "Core", sets: "3", reps: "45s", rest: "45 sec" },
+  { name: "Hanging Leg Raise", muscle: "Core", sets: "3", reps: "12", rest: "60 sec" },
 ];
 const trainerColors = [
   "bg-[#e9f2ff] text-[#4d73b8]",
@@ -896,30 +940,50 @@ function CreateTrainerModal({
 }
 
 type CreatePlanModalProps = {
+  initialPlan?: WorkoutPlan | null;
   onClose: () => void;
-  onCreate: (
-    plan: Omit<WorkoutPlan, "id" | "assignedMemberIds" | "assignedMemberNames">,
+  onSave: (
+    plan: Omit<WorkoutPlan, "id" | "assignedMemberIds" | "assignedMemberNames"> & {
+      id?: string;
+    },
   ) => Promise<void>;
   isSaving: boolean;
   error: string;
 };
 
 function CreatePlanModal({
+  initialPlan = null,
   onClose,
-  onCreate,
+  onSave,
   isSaving,
   error,
 }: CreatePlanModalProps) {
-  const [title, setTitle] = useState("");
-  const [goal, setGoal] = useState("");
-  const [exercises, setExercises] = useState<Exercise[]>([
-    { id: 1, name: "", sets: "3", reps: "10", rest: "60 sec", muscle: "Chest" },
-  ]);
+  const [title, setTitle] = useState(initialPlan?.title ?? "");
+  const [goal, setGoal] = useState(initialPlan?.goal ?? "");
+  const [scheduledDays, setScheduledDays] = useState<string[]>(
+    initialPlan?.scheduledDays ?? [],
+  );
+  const [exercises, setExercises] = useState<Exercise[]>(
+    initialPlan && initialPlan.exercises.length > 0
+      ? initialPlan.exercises.map((ex, idx) => ({
+          ...ex,
+          id: idx + 1,
+          day: ex.day ?? "",
+          targetWeightKg: ex.targetWeightKg ?? 0,
+        }))
+      : [{ id: 1, name: "", sets: "3", reps: "10", rest: "60 sec", muscle: "Chest", day: "", targetWeightKg: 0 }],
+  );
+
+  function toggleDay(day: string) {
+    setScheduledDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day],
+    );
+  }
 
   function updateExercise(
     id: number,
     field: keyof Omit<Exercise, "id">,
-    value: string,
+    value: string | number,
   ) {
     setExercises((current) =>
       current.map((exercise) =>
@@ -928,25 +992,55 @@ function CreatePlanModal({
     );
   }
 
+  function moveExercise(index: number, direction: -1 | 1) {
+    setExercises((current) => {
+      const nextIdx = index + direction;
+      if (nextIdx < 0 || nextIdx >= current.length) return current;
+      const copy = [...current];
+      const [moved] = copy.splice(index, 1);
+      copy.splice(nextIdx, 0, moved);
+      return copy;
+    });
+  }
+
+  function addQuickExercise(item: (typeof QUICK_LIBRARY_EXERCISES)[number]) {
+    setExercises((current) => {
+      const hasSingleBlank = current.length === 1 && !current[0].name.trim();
+      const entry: Exercise = {
+        id: Date.now() + current.length,
+        name: item.name,
+        sets: item.sets,
+        reps: item.reps,
+        rest: item.rest,
+        muscle: item.muscle,
+        day: scheduledDays[0] ?? "",
+        targetWeightKg: 0,
+      };
+      return hasSingleBlank ? [entry] : [...current, entry];
+    });
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const completeExercises = exercises
       .map((exercise) => ({ ...exercise, name: exercise.name.trim() }))
       .filter((exercise) => exercise.name);
     if (completeExercises.length === 0) return;
-    void onCreate({
+    void onSave({
+      ...(initialPlan ? { id: initialPlan.id } : {}),
       title: title.trim(),
       goal: goal.trim(),
+      scheduledDays,
       exercises: completeExercises,
     });
   }
 
   return (
     <ModalFrame
-      title="Create workout plan"
-      description="Build a reusable workout template with exercise details."
+      title={initialPlan ? "Edit workout plan" : "Create workout plan"}
+      description="Build or refine a reusable workout routine with training days, exercise order, and suggested weights."
       onClose={onClose}
-      className="max-w-[760px]"
+      className="max-w-[780px]"
     >
       <form onSubmit={submit} className="space-y-5">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -988,11 +1082,55 @@ function CreatePlanModal({
         </div>
 
         <div>
+          <span className="mb-1.5 block text-[11px] font-medium text-[#526071]">
+            Training days <span className="font-normal text-[#8993a0]">(optional)</span>
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {PLAN_WEEK_DAYS.map((day) => {
+              const selected = scheduledDays.includes(day);
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => toggleDay(day)}
+                  className={`rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                    selected
+                      ? "border-[#278968] bg-[#278968] text-white"
+                      : "border-[#e3e8ec] bg-[#fafbfc] text-[#596575] hover:bg-[#f1f4f6]"
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[#edf0f2] bg-[#fafbfc] p-3">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#687585]">
+            Quick-add from Exercise Library
+          </p>
+          <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
+            {QUICK_LIBRARY_EXERCISES.map((item) => (
+              <button
+                key={item.name}
+                type="button"
+                onClick={() => addQuickExercise(item)}
+                className="inline-flex items-center gap-1 rounded-full border border-[#dce4ea] bg-white px-2.5 py-1 text-[10px] font-medium text-[#354153] hover:border-[#278968] hover:text-[#278968]"
+              >
+                <Plus size={11} aria-hidden="true" />
+                {item.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h3 className="text-[12px] font-semibold text-[#354153]">Exercises</h3>
               <p className="mt-1 text-[10px] text-[#8993a0]">
-                Add sets, reps, rest, and target muscle group.
+                Reorder with arrows and set sets, reps, suggested weight (kg), rest, and day.
               </p>
             </div>
             <button
@@ -1007,6 +1145,8 @@ function CreatePlanModal({
                     reps: "10",
                     rest: "60 sec",
                     muscle: "Chest",
+                    day: scheduledDays[0] ?? "",
+                    targetWeightKg: 0,
                   },
                 ])
               }
@@ -1016,7 +1156,7 @@ function CreatePlanModal({
               Add exercise
             </button>
           </div>
-          <div className="max-h-[42vh] space-y-3 overflow-y-auto pr-1">
+          <div className="max-h-[38vh] space-y-3 overflow-y-auto pe-1">
             {exercises.map((exercise, index) => (
               <div
                 key={exercise.id}
@@ -1026,22 +1166,42 @@ function CreatePlanModal({
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-[#8993a0]">
                     Exercise {index + 1}
                   </p>
-                  {exercises.length > 1 && (
+                  <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      aria-label={`Remove exercise ${index + 1}`}
-                      onClick={() =>
-                        setExercises((current) =>
-                          current.filter((item) => item.id !== exercise.id),
-                        )
-                      }
-                      className="grid size-7 place-items-center rounded-md text-[#8993a0] hover:bg-[#f1f3f5] hover:text-[#b64c44]"
+                      disabled={index === 0}
+                      onClick={() => moveExercise(index, -1)}
+                      aria-label="Move exercise up"
+                      className="grid size-7 place-items-center rounded-md text-[#687585] hover:bg-[#f1f3f5] disabled:opacity-35"
                     >
-                      <X size={14} aria-hidden="true" />
+                      <ArrowUp size={13} aria-hidden="true" />
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      disabled={index === exercises.length - 1}
+                      onClick={() => moveExercise(index, 1)}
+                      aria-label="Move exercise down"
+                      className="grid size-7 place-items-center rounded-md text-[#687585] hover:bg-[#f1f3f5] disabled:opacity-35"
+                    >
+                      <ArrowDown size={13} aria-hidden="true" />
+                    </button>
+                    {exercises.length > 1 && (
+                      <button
+                        type="button"
+                        aria-label={`Remove exercise ${index + 1}`}
+                        onClick={() =>
+                          setExercises((current) =>
+                            current.filter((item) => item.id !== exercise.id),
+                          )
+                        }
+                        className="grid size-7 place-items-center rounded-md text-[#8993a0] hover:bg-[#f1f3f5] hover:text-[#b64c44]"
+                      >
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-6">
+                <div className="grid gap-2 sm:grid-cols-7">
                   <div className="sm:col-span-2">
                     <label htmlFor={`exercise-name-${exercise.id}`} className="sr-only">
                       Exercise name
@@ -1091,6 +1251,28 @@ function CreatePlanModal({
                     />
                   </div>
                   <div>
+                    <label htmlFor={`exercise-weight-${exercise.id}`} className="sr-only">
+                      Suggested weight kg
+                    </label>
+                    <input
+                      id={`exercise-weight-${exercise.id}`}
+                      type="number"
+                      min={0}
+                      max={1000}
+                      step="0.5"
+                      value={exercise.targetWeightKg ? String(exercise.targetWeightKg) : ""}
+                      onChange={(event) =>
+                        updateExercise(
+                          exercise.id,
+                          "targetWeightKg",
+                          Math.max(0, Number.parseFloat(event.target.value) || 0),
+                        )
+                      }
+                      placeholder="kg"
+                      className="min-h-9 w-full rounded-lg border border-[#e3e8ec] bg-white px-2 text-[11px] text-[#344052] outline-none focus:border-[#55b994]"
+                    />
+                  </div>
+                  <div>
                     <label htmlFor={`exercise-rest-${exercise.id}`} className="sr-only">
                       Rest time
                     </label>
@@ -1106,22 +1288,47 @@ function CreatePlanModal({
                       className="min-h-9 w-full rounded-lg border border-[#e3e8ec] bg-white px-2.5 text-[11px] text-[#344052] outline-none focus:border-[#55b994]"
                     />
                   </div>
-                  <div className="sm:col-span-2">
-                    <label htmlFor={`exercise-muscle-${exercise.id}`} className="sr-only">
-                      Target muscle group
-                    </label>
-                    <select
-                      id={`exercise-muscle-${exercise.id}`}
-                      value={exercise.muscle}
-                      onChange={(event) =>
-                        updateExercise(exercise.id, "muscle", event.target.value)
-                      }
-                      className="min-h-9 w-full rounded-lg border border-[#e3e8ec] bg-white px-2.5 text-[11px] text-[#344052] outline-none focus:border-[#55b994]"
-                    >
-                      {muscleGroups.map((muscle) => (
-                        <option key={muscle}>{muscle}</option>
-                      ))}
-                    </select>
+                  <div>
+                    {scheduledDays.length > 0 ? (
+                      <>
+                        <label htmlFor={`exercise-day-${exercise.id}`} className="sr-only">
+                          Day
+                        </label>
+                        <select
+                          id={`exercise-day-${exercise.id}`}
+                          value={exercise.day ?? ""}
+                          onChange={(event) =>
+                            updateExercise(exercise.id, "day", event.target.value)
+                          }
+                          className="min-h-9 w-full rounded-lg border border-[#e3e8ec] bg-white px-2 text-[11px] text-[#344052] outline-none focus:border-[#55b994]"
+                        >
+                          <option value="">All days</option>
+                          {scheduledDays.map((d) => (
+                            <option key={d} value={d}>
+                              {d}
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    ) : (
+                      <>
+                        <label htmlFor={`exercise-muscle-${exercise.id}`} className="sr-only">
+                          Target muscle group
+                        </label>
+                        <select
+                          id={`exercise-muscle-${exercise.id}`}
+                          value={exercise.muscle}
+                          onChange={(event) =>
+                            updateExercise(exercise.id, "muscle", event.target.value)
+                          }
+                          className="min-h-9 w-full rounded-lg border border-[#e3e8ec] bg-white px-2 text-[11px] text-[#344052] outline-none focus:border-[#55b994]"
+                        >
+                          {muscleGroups.map((muscle) => (
+                            <option key={muscle}>{muscle}</option>
+                          ))}
+                        </select>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1187,7 +1394,12 @@ function WorkoutPreview({
             <div className="min-w-0 flex-1">
               <p className="text-[12px] font-semibold text-[#354153]">{exercise.name}</p>
               <p className="mt-1.5 text-[10px] text-[#7b8794]">
-                {exercise.sets} sets · {exercise.reps} reps · {exercise.rest} rest
+                {exercise.day ? `${exercise.day} · ` : ""}
+                {exercise.sets} sets · {exercise.reps} reps
+                {exercise.targetWeightKg && exercise.targetWeightKg > 0
+                  ? ` · ${exercise.targetWeightKg} kg`
+                  : ""}{" "}
+                · {exercise.rest} rest
               </p>
             </div>
             <span className="rounded-full bg-[#f3f5f6] px-2 py-1 text-[9px] font-medium text-[#6f7b89]">
@@ -1226,6 +1438,7 @@ export function TrainersPage() {
   const [isGenerateCodeModalOpen, setIsGenerateCodeModalOpen] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [isCreatePlanModalOpen, setIsCreatePlanModalOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<WorkoutPlan | null>(null);
   const [previewPlanId, setPreviewPlanId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -1248,12 +1461,17 @@ export function TrainersPage() {
           id: string;
           title: string;
           targetGoal: string;
+          scheduledDays?: string[];
+          createdByRole?: "staff" | "trainer";
+          createdByName?: string;
           exercises: Array<{
             exerciseName: string;
             sets: string;
             reps: string;
             restTime: string;
             targetMuscleGroup: string;
+            day?: string;
+            targetWeightKg?: number;
           }>;
           assignedMemberIds: string[];
           assignedMemberNames: string[];
@@ -1286,6 +1504,9 @@ export function TrainersPage() {
           id: plan.id,
           title: plan.title,
           goal: plan.targetGoal,
+          scheduledDays: plan.scheduledDays ?? [],
+          createdByRole: plan.createdByRole === "trainer" ? "trainer" : "staff",
+          createdByName: plan.createdByName ?? "",
           exercises: plan.exercises.map((exercise, index) => ({
             id: index + 1,
             name: exercise.exerciseName,
@@ -1293,6 +1514,8 @@ export function TrainersPage() {
             reps: exercise.reps,
             rest: exercise.restTime,
             muscle: exercise.targetMuscleGroup,
+            day: exercise.day ?? "",
+            targetWeightKg: exercise.targetWeightKg ?? 0,
           })),
           assignedMemberIds: plan.assignedMemberIds,
           assignedMemberNames: plan.assignedMemberNames,
@@ -1473,30 +1696,68 @@ export function TrainersPage() {
     }
   }
 
-  async function createPlan(
-    plan: Omit<WorkoutPlan, "id" | "assignedMemberIds" | "assignedMemberNames">,
+  async function savePlan(
+    plan: Omit<WorkoutPlan, "id" | "assignedMemberIds" | "assignedMemberNames"> & {
+      id?: string;
+    },
   ) {
     setIsSaving(true);
     setApiError("");
     try {
       const data = await postJson<{ workoutPlan: { id: string } }>("/api/workouts", {
-        action: "create",
+        action: plan.id ? "update" : "create",
+        ...(plan.id ? { workoutPlanId: plan.id } : {}),
         title: plan.title,
         targetGoal: plan.goal,
+        scheduledDays: plan.scheduledDays ?? [],
         exercises: plan.exercises.map((exercise) => ({
           exerciseName: exercise.name,
           sets: exercise.sets,
           reps: exercise.reps,
           restTime: exercise.rest,
           targetMuscleGroup: exercise.muscle,
+          day: exercise.day ?? "",
+          targetWeightKg: exercise.targetWeightKg ?? 0,
         })),
       });
       setIsCreatePlanModalOpen(false);
+      setEditingPlan(null);
       await loadData();
       setPreviewPlanId(data.workoutPlan.id);
     } catch (error) {
       setApiError(
         error instanceof Error ? error.message : "Unable to save workout plan.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function duplicatePlan(workoutPlanId: string) {
+    setIsSaving(true);
+    setApiError("");
+    try {
+      await postJson("/api/workouts", { action: "duplicate", workoutPlanId });
+      await loadData();
+    } catch (error) {
+      setApiError(
+        error instanceof Error ? error.message : "Unable to duplicate workout plan.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function deletePlan(workoutPlanId: string) {
+    setIsSaving(true);
+    setApiError("");
+    try {
+      await postJson("/api/workouts", { action: "delete", workoutPlanId });
+      if (previewPlanId === workoutPlanId) setPreviewPlanId(null);
+      await loadData();
+    } catch (error) {
+      setApiError(
+        error instanceof Error ? error.message : "Unable to delete workout plan.",
       );
     } finally {
       setIsSaving(false);
@@ -1512,7 +1773,8 @@ export function TrainersPage() {
     isCreateTrainerModalOpen ||
     isGenerateCodeModalOpen ||
     isScheduleModalOpen ||
-    isCreatePlanModalOpen;
+    isCreatePlanModalOpen ||
+    editingPlan !== null;
 
   return (
     <AppShell activePage="Trainers">
@@ -1747,7 +2009,7 @@ export function TrainersPage() {
           </div>
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[680px] border-collapse text-left">
+              <table className="w-full min-w-[680px] border-collapse text-start">
                 <thead>
                   <tr className="bg-[#fafbfc]">
                     {["Invite code", "Designated coach", "Specialty", "Status", "Actions"].map(
@@ -1862,7 +2124,7 @@ export function TrainersPage() {
           </div>
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left">
+              <table className="w-full min-w-[760px] border-collapse text-start">
                 <thead>
                   <tr className="bg-[#fafbfc]">
                     {[
@@ -1988,26 +2250,78 @@ export function TrainersPage() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {plans.map((plan) => (
               <Card key={plan.id} className="p-5">
-                <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="mb-3 flex items-start justify-between gap-3">
                   <span className="grid size-9 place-items-center rounded-xl bg-[#eaf6f0] text-[#278968]">
                     <Dumbbell size={17} aria-hidden="true" />
                   </span>
-                  <span className="rounded-full bg-[#f2f4f6] px-2.5 py-1 text-[9px] font-medium text-[#6f7b89]">
-                    {plan.goal}
-                  </span>
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {plan.createdByRole === "trainer" && (
+                      <span className="rounded-full bg-[#e9f2ff] px-2 py-0.5 text-[9px] font-semibold text-[#3f68b2]">
+                        {plan.createdByName ? `Coach · ${plan.createdByName}` : "Coach Routine"}
+                      </span>
+                    )}
+                    <span className="rounded-full bg-[#f2f4f6] px-2.5 py-1 text-[9px] font-medium text-[#6f7b89]">
+                      {plan.goal}
+                    </span>
+                  </div>
                 </div>
                 <h3 className="text-[13px] font-semibold text-[#354153]">{plan.title}</h3>
-                <p className="mt-1.5 text-[10px] text-[#87909d]">
+                <p className="mt-1 text-[10px] text-[#87909d]">
                   {plan.exercises.length} exercises · Workout template
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setPreviewPlanId(plan.id)}
-                  className="mt-4 inline-flex min-h-8 items-center gap-1 text-[10px] font-semibold text-[#278968] hover:text-[#207858]"
-                >
-                  Preview routine
-                  <ChevronRight size={13} aria-hidden="true" />
-                </button>
+                {plan.scheduledDays && plan.scheduledDays.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {plan.scheduledDays.map((day) => (
+                      <span
+                        key={day}
+                        className="rounded-md bg-[#f2f5f7] px-1.5 py-0.5 text-[9px] font-semibold text-[#596575]"
+                      >
+                        {day}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[#edf0f2] pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPlanId(plan.id)}
+                    className="inline-flex min-h-8 items-center gap-1 text-[10px] font-semibold text-[#278968] hover:text-[#207858]"
+                  >
+                    Preview routine
+                    <ChevronRight size={13} className="rtl:rotate-180" aria-hidden="true" />
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setApiError("");
+                        setEditingPlan(plan);
+                      }}
+                      className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[#e3e8ec] px-2 text-[10px] font-medium text-[#526071] hover:bg-[#f7f9fa]"
+                    >
+                      <Pencil size={11} aria-hidden="true" />
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={() => void duplicatePlan(plan.id)}
+                      className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[#e3e8ec] px-2 text-[10px] font-medium text-[#526071] hover:bg-[#f7f9fa]"
+                    >
+                      <Copy size={11} aria-hidden="true" />
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={() => void deletePlan(plan.id)}
+                      aria-label={`Delete ${plan.title}`}
+                      className="grid size-7 place-items-center rounded-md border border-[#f2d5d1] text-[#b64c44] hover:bg-[#fff5f3]"
+                    >
+                      <Trash2 size={11} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
               </Card>
             ))}
             {!isLoading && plans.length === 0 && (
@@ -2032,7 +2346,7 @@ export function TrainersPage() {
           </div>
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[700px] border-collapse text-left">
+              <table className="w-full min-w-[700px] border-collapse text-start">
                 <caption className="sr-only">
                   Members, their trainers, and assigned workout plans
                 </caption>
@@ -2179,10 +2493,15 @@ export function TrainersPage() {
           error={apiError}
         />
       )}
-      {isCreatePlanModalOpen && (
+      {(isCreatePlanModalOpen || editingPlan !== null) && (
         <CreatePlanModal
-          onClose={() => setIsCreatePlanModalOpen(false)}
-          onCreate={createPlan}
+          key={editingPlan?.id ?? "new-plan"}
+          initialPlan={editingPlan}
+          onClose={() => {
+            setIsCreatePlanModalOpen(false);
+            setEditingPlan(null);
+          }}
+          onSave={savePlan}
           isSaving={isSaving}
           error={apiError}
         />

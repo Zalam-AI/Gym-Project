@@ -21,12 +21,14 @@ import {
   RotateCcw,
   ScanLine,
   ShieldCheck,
+  Sparkles,
   TrendingUp,
   UserRound,
   Wallet,
   X,
   Zap,
 } from "lucide-react";
+import { MemberTutorialOverlay } from "@/components/member-tutorial-overlay";
 import {
   TrainerPortalView,
   type AvailabilitySlot,
@@ -1087,6 +1089,73 @@ export function MemberApp() {
   ]);
   const [pendingRequest, setPendingRequest] = useState<PendingSubscriptionInfo | null>(null);
   const [connectedGym, setConnectedGym] = useState<ConnectedGymInfo | null>(null);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const [workoutsLoadedOnce, setWorkoutsLoadedOnce] = useState(false);
+
+  const tutorialStorageKey =
+    member?.id && member?.gymId
+      ? `gymos_member_tutorial_done_v1:${member.id}:${member.gymId}`
+      : "";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (authStatus !== "authenticated" || accountRole !== "member" || !member?.id) {
+      return;
+    }
+
+    if (!member.enrolledInGym) {
+      try {
+        window.localStorage.setItem(
+          `gymos_member_onboarding_seen_v1:${member.id}`,
+          "1",
+        );
+      } catch {
+        // Ignore private browsing storage limits
+      }
+      return;
+    }
+
+    if (!member.gymId || !workoutsLoadedOnce) return;
+    try {
+      const done = window.localStorage.getItem(tutorialStorageKey);
+      if (done === "completed" || done === "skipped") return;
+      const onboardingSeen =
+        window.localStorage.getItem(
+          `gymos_member_onboarding_seen_v1:${member.id}`,
+        ) === "1";
+      const isFreshMember =
+        workoutProgress.totalWorkouts === 0 && recentVisits.length === 0;
+      if (onboardingSeen || isFreshMember) {
+        setIsTutorialOpen(true);
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [
+    accountRole,
+    authStatus,
+    member?.enrolledInGym,
+    member?.gymId,
+    member?.id,
+    recentVisits.length,
+    tutorialStorageKey,
+    workoutProgress.totalWorkouts,
+    workoutsLoadedOnce,
+  ]);
+
+  const finishTutorial = useCallback(
+    (outcome: "completed" | "skipped") => {
+      setIsTutorialOpen(false);
+      if (typeof window !== "undefined" && tutorialStorageKey) {
+        try {
+          window.localStorage.setItem(tutorialStorageKey, outcome);
+        } catch {
+          // Ignore storage errors
+        }
+      }
+    },
+    [tutorialStorageKey],
+  );
 
   // Trainer portal state
   const [trainerProfile, setTrainerProfile] = useState<TrainerProfileData | null>(null);
@@ -1192,6 +1261,8 @@ export function MemberApp() {
       setWorkoutProgress(payload.progress ?? EMPTY_PROGRESS_SUMMARY);
     } catch {
       // Non-blocking: digital pass & check-in remain functional if workout analytics fail temporarily.
+    } finally {
+      setWorkoutsLoadedOnce(true);
     }
   }, []);
 
@@ -1762,7 +1833,7 @@ export function MemberApp() {
                   </button>
                 </div>
               ) : (
-                <div className="mt-4 rounded-xl border border-accent-border bg-accent-soft px-4 py-3 text-left">
+                <div className="mt-4 rounded-xl border border-accent-border bg-accent-soft px-4 py-3 text-start">
                   <p className="text-[9px] font-semibold uppercase tracking-wide text-ink-secondary">
                     Coach floor check-in · Verified
                   </p>
@@ -2090,6 +2161,7 @@ export function MemberApp() {
             <div className="space-y-4">
               {/* 1. TODAY'S WORKOUT / REST DAY HERO (Prioritized Start Workout) */}
               <section
+                data-tour-id="tour-home-hero"
                 aria-label="Today's workout"
                 className={`${ui.cardElevated} p-4`}
               >
@@ -2527,6 +2599,7 @@ export function MemberApp() {
 
               {/* 6. GYM CHECK-IN & DIGITAL PASS */}
               <section
+                data-tour-id="tour-digital-pass"
                 aria-labelledby="digital-pass-heading"
                 className={`${ui.card} p-4`}
               >
@@ -2823,9 +2896,23 @@ export function MemberApp() {
                 </p>
               </div>
 
-              {/* Application Settings: Workout Rest Timer & Appearance */}
-              <RestTimerSettingsControl />
-              <ThemePreferenceControl />
+              {/* Application Settings: Workout Rest Timer, Appearance & Quick Guide */}
+              <div data-tour-id="tour-profile-settings" className="space-y-3">
+                <RestTimerSettingsControl />
+                <ThemePreferenceControl />
+                <button
+                  type="button"
+                  data-testid="replay-app-tutorial-btn"
+                  onClick={() => {
+                    setActiveTab("Pass");
+                    setIsTutorialOpen(true);
+                  }}
+                  className={`${ui.btnSecondary} flex min-h-11 w-full items-center justify-center gap-2 rounded-xl text-[11px] font-semibold`}
+                >
+                  <Sparkles size={14} className="text-accent-text" aria-hidden="true" />
+                  Replay App Tutorial
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -2842,6 +2929,13 @@ export function MemberApp() {
 
         <AppBottomNav activeTab={activeTab} onSelect={setActiveTab} />
       </section>
+
+      <MemberTutorialOverlay
+        open={isTutorialOpen}
+        onSelectTab={setActiveTab}
+        onComplete={() => finishTutorial("completed")}
+        onSkip={() => finishTutorial("skipped")}
+      />
 
       {qrScannerModal}
     </main>

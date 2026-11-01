@@ -17,6 +17,7 @@ export async function GET(request: Request) {
         mode: "neutral",
         hostname: resolved.host.hostname,
         baseDomain,
+        resolvedBy: null,
         gym: null,
         tenant: null,
       });
@@ -28,6 +29,7 @@ export async function GET(request: Request) {
           mode: "not-found",
           hostname: resolved.host.hostname,
           baseDomain,
+          resolvedBy: null,
           gym: null,
           tenant: null,
           error: "No gym workspace exists at this address.",
@@ -41,19 +43,20 @@ export async function GET(request: Request) {
       address: resolved.gym.address,
     };
 
-    if (resolved.gym.status !== "active") {
+    if (!resolved.gym.accessAllowed) {
       return NextResponse.json(
         {
           mode: "suspended",
           hostname: resolved.host.hostname,
           baseDomain,
-          resolvedBy: resolved.host.kind === "custom-domain" ? "custom-domain" : "subdomain",
+          resolvedBy: resolved.resolvedBy,
           gym: brandingPayload,
           tenant: brandingPayload,
           error:
-            resolved.gym.status === "pending"
+            resolved.gym.accessDeniedReason ??
+            (resolved.gym.status === "pending"
               ? "This gym workspace is awaiting platform administrator approval."
-              : "This gym workspace is currently suspended.",
+              : "This gym workspace is currently suspended."),
         },
         { status: 403 },
       );
@@ -63,7 +66,7 @@ export async function GET(request: Request) {
       mode: "tenant",
       hostname: resolved.host.hostname,
       baseDomain,
-      resolvedBy: resolved.host.kind === "custom-domain" ? "custom-domain" : "subdomain",
+      resolvedBy: resolved.resolvedBy,
       gym: brandingPayload,
       tenant: brandingPayload,
     });

@@ -2,6 +2,8 @@
 
 import { useState, type FormEvent } from "react";
 import {
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   CalendarPlus,
   Check,
@@ -9,16 +11,26 @@ import {
   ChevronDown,
   ChevronUp,
   Clock3,
+  Copy,
+  Dumbbell,
   LoaderCircle,
   LogOut,
+  Pencil,
   Phone,
+  Plus,
   QrCode,
   ScanLine,
+  Search,
   Sparkles,
+  Trash2,
   UserRound,
   UsersRound,
   X,
 } from "lucide-react";
+import {
+  GYMOS_EXERCISE_LIBRARY,
+  matchesExerciseQuery,
+} from "@/lib/exercise-media";
 import { LanguageSwitch } from "@/lib/i18n";
 import {
   clearMobileSessionToken,
@@ -31,7 +43,7 @@ import {
   ui,
 } from "@/lib/theme";
 
-export type TrainerTab = "Pass" | "Clients" | "Schedule" | "Profile";
+export type TrainerTab = "Pass" | "Clients" | "Routines" | "Schedule" | "Profile";
 
 export type AvailabilitySlot = {
   day: string;
@@ -46,12 +58,19 @@ export type WorkoutExercise = {
   reps: string;
   rest: string;
   muscle: string;
+  day?: string;
+  targetWeightKg?: number;
 };
 
 export type WorkoutPlanSummary = {
   id: string;
   title: string;
   targetGoal: string;
+  scheduledDays?: string[];
+  createdByRole?: "staff" | "trainer";
+  createdByName?: string;
+  isOwnedByMe?: boolean;
+  assignedMemberIds?: string[];
   exercises: WorkoutExercise[];
 };
 
@@ -173,6 +192,28 @@ export function TrainerPortalView({
 
   const [isSaving, setIsSaving] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [routineNotice, setRoutineNotice] = useState("");
+
+  // Trainer Routine Builder state
+  const [isRoutineBuilderOpen, setIsRoutineBuilderOpen] = useState(false);
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  const [planTitle, setPlanTitle] = useState("");
+  const [planGoal, setPlanGoal] = useState("Strength & Hypertrophy");
+  const [planDays, setPlanDays] = useState<string[]>([]);
+  const [planAssignMemberId, setPlanAssignMemberId] = useState("");
+  const [exerciseSearch, setExerciseSearch] = useState("");
+  const [planExercises, setPlanExercises] = useState<
+    Array<{
+      key: string;
+      name: string;
+      muscle: string;
+      sets: string;
+      reps: string;
+      rest: string;
+      day: string;
+      targetWeightKg: string;
+    }>
+  >([]);
 
   const traineesOnFloor = trainees.filter((t) => t.onFloorNow);
   const upcomingSessions = sessions.filter((s) => s.status === "scheduled");
@@ -277,9 +318,132 @@ export function TrainerPortalView({
     }
   }
 
+  function openCreateTrainerRoutine(assignToMemberId = "") {
+    setActionError("");
+    setRoutineNotice("");
+    setEditingPlanId(null);
+    setPlanTitle("");
+    setPlanGoal("Strength & Hypertrophy");
+    setPlanDays(["Sat", "Mon", "Wed"]);
+    setPlanAssignMemberId(assignToMemberId);
+    setExerciseSearch("");
+    setPlanExercises([
+      {
+        key: `ex-${Date.now()}-1`,
+        name: "Barbell Bench Press",
+        muscle: "Chest",
+        sets: "4",
+        reps: "8-10",
+        rest: "90 sec",
+        day: "Sat",
+        targetWeightKg: "",
+      },
+    ]);
+    setIsRoutineBuilderOpen(true);
+  }
+
+  function openEditTrainerRoutine(plan: WorkoutPlanSummary, assignToMemberId = "") {
+    setActionError("");
+    setRoutineNotice("");
+    setEditingPlanId(plan.isOwnedByMe ? plan.id : null);
+    setPlanTitle(
+      plan.isOwnedByMe ? plan.title : `${plan.title} (${trainer.name.split(" ")[0]})`,
+    );
+    setPlanGoal(plan.targetGoal || "Strength & Hypertrophy");
+    setPlanDays(plan.scheduledDays ?? []);
+    setPlanAssignMemberId(assignToMemberId);
+    setExerciseSearch("");
+    setPlanExercises(
+      plan.exercises.map((ex, idx) => ({
+        key: `ex-${Date.now()}-${idx}`,
+        name: ex.name,
+        muscle: ex.muscle || "Full body",
+        sets: ex.sets || "3",
+        reps: ex.reps || "10",
+        rest: ex.rest || "60 sec",
+        day: ex.day ?? "",
+        targetWeightKg:
+          ex.targetWeightKg && ex.targetWeightKg > 0 ? String(ex.targetWeightKg) : "",
+      })),
+    );
+    setIsRoutineBuilderOpen(true);
+  }
+
+  function togglePlanDay(day: string) {
+    setPlanDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day],
+    );
+  }
+
+  function addExerciseToTrainerDraft(item: {
+    name: string;
+    muscle: string;
+    sets?: number;
+    reps?: string;
+    restSeconds?: number;
+  }) {
+    setPlanExercises((prev) => [
+      ...prev,
+      {
+        key: `ex-${Date.now()}-${prev.length}`,
+        name: item.name,
+        muscle: item.muscle,
+        sets: String(item.sets ?? 3),
+        reps: item.reps ?? "10",
+        rest: `${item.restSeconds ?? 60} sec`,
+        day: planDays[0] ?? "",
+        targetWeightKg: "",
+      },
+    ]);
+    setExerciseSearch("");
+  }
+
+  function moveTrainerDraftExercise(index: number, direction: -1 | 1) {
+    setPlanExercises((prev) => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const copy = [...prev];
+      const [moved] = copy.splice(index, 1);
+      copy.splice(target, 0, moved);
+      return copy;
+    });
+  }
+
+  async function submitTrainerRoutine(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!planTitle.trim() || planExercises.length === 0) {
+      setActionError("Enter a routine title and add at least one exercise.");
+      return;
+    }
+    const ok = await postTrainerAction({
+      action: editingPlanId ? "update-workout" : "create-workout",
+      ...(editingPlanId ? { workoutPlanId: editingPlanId } : {}),
+      title: planTitle.trim(),
+      targetGoal: planGoal.trim() || "Strength & Hypertrophy",
+      scheduledDays: planDays,
+      ...(planAssignMemberId ? { assignToMemberId: planAssignMemberId } : {}),
+      exercises: planExercises.map((ex) => ({
+        exerciseName: ex.name.trim(),
+        targetMuscleGroup: ex.muscle,
+        sets: ex.sets.trim() || "3",
+        reps: ex.reps.trim() || "10",
+        restTime: ex.rest.trim() || "60 sec",
+        day: planDays.includes(ex.day) ? ex.day : "",
+        targetWeightKg: Math.max(0, Number.parseFloat(ex.targetWeightKg) || 0),
+      })),
+    });
+    if (ok) {
+      setIsRoutineBuilderOpen(false);
+      setRoutineNotice(
+        editingPlanId ? "Routine updated." : "Routine created and ready.",
+      );
+    }
+  }
+
   const tabs: Array<{ label: TrainerTab; icon: typeof QrCode }> = [
     { label: "Pass", icon: QrCode },
     { label: "Clients", icon: UsersRound },
+    { label: "Routines", icon: Dumbbell },
     { label: "Schedule", icon: CalendarDays },
     { label: "Profile", icon: UserRound },
   ];
@@ -392,7 +556,7 @@ export function TrainerPortalView({
                       {trainees.length} {trainees.length === 1 ? "member" : "members"}
                     </p>
                   </div>
-                  <div className="text-right">
+                  <div className="text-end">
                     <p className="text-[9px] text-ink-muted">FLOOR STATUS</p>
                     <p className="mt-1 text-[12px] font-semibold text-accent-text">
                       {trainer.checkedInNow ? "Checked in" : "Ready to scan"}
@@ -456,7 +620,7 @@ export function TrainerPortalView({
               <button
                 type="button"
                 onClick={() => setActiveTab("Schedule")}
-                className={`${ui.cardInteractive} flex w-full items-center gap-3 p-4 text-left`}
+                className={`${ui.cardInteractive} flex w-full items-center gap-3 p-4 text-start`}
               >
                 <span className="grid size-9 place-items-center rounded-xl border border-line bg-subtle text-ink-secondary">
                   <CalendarDays size={17} aria-hidden="true" />
@@ -538,7 +702,7 @@ export function TrainerPortalView({
                         onClick={() =>
                           setExpandedTraineeId(isExpanded ? null : client.id)
                         }
-                        className="flex w-full items-start gap-3 p-3.5 text-left"
+                        className="flex w-full items-start gap-3 p-3.5 text-start"
                       >
                         <span
                           className={`grid size-10 shrink-0 place-items-center rounded-full border text-[11px] font-semibold ${
@@ -645,22 +809,48 @@ export function TrainerPortalView({
                                   <span className="truncate font-medium text-ink">
                                     {idx + 1}. {ex.name}
                                   </span>
-                                  <span className="shrink-0 text-[9px] text-ink-muted">
+                                  <span
+                                    data-no-translate="true"
+                                    className="shrink-0 text-[9px] text-ink-muted"
+                                  >
+                                    {ex.day ? `${ex.day} · ` : ""}
                                     {ex.sets}×{ex.reps}
+                                    {ex.targetWeightKg && ex.targetWeightKg > 0
+                                      ? ` · ${ex.targetWeightKg}kg`
+                                      : ""}
                                   </span>
                                 </li>
                               ))}
                             </ul>
                           )}
 
-                          <button
-                            type="button"
-                            onClick={() => openNewSessionFor(client.id)}
-                            className={`${ui.btnSecondary} min-h-9 w-full text-[10px]`}
-                          >
-                            <CalendarPlus size={13} aria-hidden="true" />
-                            Schedule session with {client.name.split(" ")[0]}
-                          </button>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const fullPlan = client.workoutPlan
+                                  ? workoutPlans.find((p) => p.id === client.workoutPlan?.id)
+                                  : null;
+                                if (fullPlan) {
+                                  openEditTrainerRoutine(fullPlan, client.id);
+                                } else {
+                                  openCreateTrainerRoutine(client.id);
+                                }
+                              }}
+                              className={`${ui.btnPrimary} min-h-9 px-2.5 text-[10px]`}
+                            >
+                              <Dumbbell size={12} aria-hidden="true" />
+                              {client.workoutPlan ? "Customize Routine" : "Create Routine"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openNewSessionFor(client.id)}
+                              className={`${ui.btnSecondary} min-h-9 px-2.5 text-[10px]`}
+                            >
+                              <CalendarPlus size={12} aria-hidden="true" />
+                              Schedule Session
+                            </button>
+                          </div>
                         </div>
                       )}
                     </li>
@@ -675,6 +865,208 @@ export function TrainerPortalView({
                   </li>
                 )}
               </ul>
+            </section>
+          )}
+
+          {activeTab === "Routines" && (
+            <section aria-labelledby="trainer-routines-heading" className="space-y-3.5">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
+                    Coach Builder
+                  </p>
+                  <h2
+                    id="trainer-routines-heading"
+                    className="mt-1 text-[19px] font-semibold tracking-[-0.035em] text-ink"
+                  >
+                    Workout routines
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openCreateTrainerRoutine()}
+                  className={`${ui.btnPrimary} min-h-9 px-3 text-[10px]`}
+                >
+                  <Plus size={13} aria-hidden="true" />
+                  New Routine
+                </button>
+              </div>
+
+              {routineNotice && (
+                <div
+                  role="status"
+                  className="flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3.5 py-2 text-[11px] font-medium text-accent-text"
+                >
+                  <span>{routineNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setRoutineNotice("")}
+                    className="text-[10px] underline"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {workoutPlans.length === 0 ? (
+                <div className={`${ui.card} p-6 text-center`}>
+                  <p className="text-[12px] font-semibold text-ink">
+                    No workout routines yet
+                  </p>
+                  <p className="mt-1 text-[10px] text-ink-secondary">
+                    Create reusable routines with training days, suggested weights, and exercise order for your trainees.
+                  </p>
+                </div>
+              ) : (
+                <ul className="space-y-3">
+                  {workoutPlans.map((plan) => (
+                    <li key={plan.id} className={`${ui.card} space-y-2.5 p-3.5`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={
+                                plan.isOwnedByMe ? ui.badgeAccent : ui.badgeNeutral
+                              }
+                            >
+                              {plan.isOwnedByMe ? "My Routine" : "Gym Template"}
+                            </span>
+                            {plan.scheduledDays && plan.scheduledDays.length > 0 && (
+                              <span className="text-[9px] font-semibold text-ink-muted">
+                                {plan.scheduledDays.join(" · ")}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="mt-1 truncate text-[14px] font-semibold text-ink">
+                            {plan.title}
+                          </h3>
+                          <p className="text-[10px] text-ink-secondary">
+                            {plan.targetGoal} · {plan.exercises.length} exercises
+                          </p>
+                        </div>
+                      </div>
+
+                      <ul className={`${ui.cardSubtle} space-y-1 p-2.5`}>
+                        {plan.exercises.slice(0, 4).map((ex, idx) => (
+                          <li
+                            key={ex.id}
+                            className="flex items-center justify-between gap-2 text-[10px]"
+                          >
+                            <span className="truncate font-medium text-ink">
+                              {idx + 1}. {ex.name}
+                            </span>
+                            <span
+                              data-no-translate="true"
+                              className="shrink-0 text-[9px] text-ink-muted"
+                            >
+                              {ex.day ? `${ex.day} · ` : ""}
+                              {ex.sets}×{ex.reps}
+                              {ex.targetWeightKg && ex.targetWeightKg > 0
+                                ? ` · ${ex.targetWeightKg}kg`
+                                : ""}
+                            </span>
+                          </li>
+                        ))}
+                        {plan.exercises.length > 4 && (
+                          <li className="text-[9px] text-ink-muted">
+                            +{plan.exercises.length - 4} more exercises
+                          </li>
+                        )}
+                      </ul>
+
+                      {trainees.length > 0 && (
+                        <div>
+                          <label
+                            htmlFor={`assign-routine-${plan.id}`}
+                            className="sr-only"
+                          >
+                            Assign to trainee
+                          </label>
+                          <select
+                            id={`assign-routine-${plan.id}`}
+                            disabled={isSaving}
+                            value=""
+                            onChange={(e) => {
+                              if (!e.target.value) return;
+                              void postTrainerAction({
+                                action: "assign-workout",
+                                memberId: e.target.value,
+                                workoutPlanId: plan.id,
+                              }).then((ok) => {
+                                if (ok) setRoutineNotice("Routine assigned to trainee.");
+                              });
+                            }}
+                            className={`${ui.select} min-h-9 px-2.5 text-[10px]`}
+                          >
+                            <option value="">Assign to a trainee…</option>
+                            {trainees.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-1.5 border-t border-divider pt-2">
+                        {plan.isOwnedByMe ? (
+                          <button
+                            type="button"
+                            onClick={() => openEditTrainerRoutine(plan)}
+                            className={`${ui.btnSecondary} min-h-8 flex-1 px-2.5 text-[10px]`}
+                          >
+                            <Pencil size={12} aria-hidden="true" />
+                            Edit
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openEditTrainerRoutine(plan)}
+                            className={`${ui.btnSecondary} min-h-8 flex-1 px-2.5 text-[10px]`}
+                          >
+                            <Copy size={12} aria-hidden="true" />
+                            Customize Copy
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={isSaving}
+                          onClick={() =>
+                            void postTrainerAction({
+                              action: "duplicate-workout",
+                              workoutPlanId: plan.id,
+                            }).then((ok) => {
+                              if (ok) setRoutineNotice("Routine duplicated.");
+                            })
+                          }
+                          className={`${ui.btnGhost} min-h-8 px-2.5 text-[10px]`}
+                        >
+                          <Copy size={12} aria-hidden="true" />
+                          Duplicate
+                        </button>
+                        {plan.isOwnedByMe && (
+                          <button
+                            type="button"
+                            disabled={isSaving}
+                            onClick={() =>
+                              void postTrainerAction({
+                                action: "delete-workout",
+                                workoutPlanId: plan.id,
+                              }).then((ok) => {
+                                if (ok) setRoutineNotice("Routine deleted.");
+                              })
+                            }
+                            aria-label={`Delete ${plan.title}`}
+                            className={`${ui.btnGhost} min-h-8 px-2 text-[10px] text-danger-text`}
+                          >
+                            <Trash2 size={12} aria-hidden="true" />
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
           )}
 
@@ -967,7 +1359,7 @@ export function TrainerPortalView({
 
         <nav
           aria-label="Trainer app navigation"
-          className={`grid grid-cols-4 px-2 ${ui.bottomNav}`}
+          className={`grid grid-cols-5 px-2 ${ui.bottomNav}`}
         >
           {tabs.map(({ label, icon: Icon }) => (
             <button
@@ -1116,6 +1508,377 @@ export function TrainerPortalView({
                   <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />
                 )}
                 {isSaving ? "Saving…" : "Confirm session"}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {isRoutineBuilderOpen && (
+        <div
+          className={ui.modalSheetBackdrop}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !isSaving) {
+              setIsRoutineBuilderOpen(false);
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="trainer-routine-builder-title"
+            className="flex max-h-[90dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+          >
+            <header className="flex items-center justify-between border-b border-divider px-5 py-3.5">
+              <div>
+                <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-accent-text">
+                  Coach Routine Builder
+                </p>
+                <h2
+                  id="trainer-routine-builder-title"
+                  className="text-[15px] font-semibold text-ink"
+                >
+                  {editingPlanId ? "Edit workout routine" : "Create workout routine"}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setIsRoutineBuilderOpen(false)}
+                className={`${ui.btnGhost} size-8`}
+              >
+                <X size={17} aria-hidden="true" />
+              </button>
+            </header>
+
+            <form
+              onSubmit={submitTrainerRoutine}
+              className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-4 py-4"
+            >
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
+                    Routine title
+                  </span>
+                  <input
+                    required
+                    maxLength={80}
+                    placeholder="e.g. Upper / Lower Hypertrophy"
+                    value={planTitle}
+                    onChange={(e) => setPlanTitle(e.target.value)}
+                    className={`${ui.inputCompact} min-h-10`}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
+                    Training goal
+                  </span>
+                  <input
+                    required
+                    maxLength={80}
+                    value={planGoal}
+                    onChange={(e) => setPlanGoal(e.target.value)}
+                    className={`${ui.inputCompact} min-h-10`}
+                  />
+                </label>
+              </div>
+
+              {trainees.length > 0 && (
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-medium text-ink-secondary">
+                    Assign to trainee <span className="text-ink-muted">(optional)</span>
+                  </span>
+                  <select
+                    value={planAssignMemberId}
+                    onChange={(e) => setPlanAssignMemberId(e.target.value)}
+                    className={`${ui.select} min-h-9 text-[11px]`}
+                  >
+                    <option value="">Save as reusable template only</option>
+                    {trainees.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <div>
+                <span className="mb-1.5 block text-[10px] font-medium text-ink-secondary">
+                  Training days
+                </span>
+                <div className="grid grid-cols-7 gap-1">
+                  {ALL_WEEK_DAYS.map((day) => {
+                    const selected = planDays.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => togglePlanDay(day)}
+                        className={`rounded-xl border py-1.5 text-[10px] font-semibold transition-colors ${
+                          selected
+                            ? "border-accent bg-accent text-on-accent"
+                            : "border-line bg-subtle text-ink-secondary hover:text-ink"
+                        }`}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Quick Add from Bilingual Exercise Library */}
+              <div className="space-y-2 rounded-2xl border border-line bg-subtle p-3">
+                <p className="text-[10px] font-semibold text-ink">
+                  Add from Exercise Library
+                </p>
+                <div className="relative">
+                  <Search
+                    size={13}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-ink-muted"
+                  />
+                  <input
+                    type="search"
+                    value={exerciseSearch}
+                    onChange={(e) => setExerciseSearch(e.target.value)}
+                    placeholder="Search exercise..."
+                    className={`${ui.inputCompact} min-h-9 ps-8`}
+                  />
+                </div>
+                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto pt-0.5">
+                  {GYMOS_EXERCISE_LIBRARY.filter((item) =>
+                    matchesExerciseQuery(item, exerciseSearch),
+                  )
+                    .slice(0, 12)
+                    .map((item) => (
+                      <button
+                        key={item.name}
+                        type="button"
+                        onClick={() => addExerciseToTrainerDraft(item)}
+                        className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-surface px-2.5 py-1 text-[10px] font-medium text-ink hover:border-accent hover:text-accent-text"
+                      >
+                        <Plus size={11} className="text-accent-text" aria-hidden="true" />
+                        <span>{item.name}</span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+
+              {/* Ordered Exercises with Reordering, Day Tag & Suggested Weight */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+                    Exercises ({planExercises.length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addExerciseToTrainerDraft({
+                        name: "",
+                        muscle: "Full body",
+                        sets: 3,
+                        reps: "10",
+                        restSeconds: 60,
+                      })
+                    }
+                    className="text-[10px] font-semibold text-accent-text hover:underline"
+                  >
+                    + Custom exercise
+                  </button>
+                </div>
+
+                {planExercises.map((ex, idx) => (
+                  <div
+                    key={ex.key}
+                    className="space-y-2 rounded-2xl border border-line bg-surface p-3"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        data-no-translate="true"
+                        className="grid size-6 shrink-0 place-items-center rounded-lg bg-subtle text-[10px] font-bold text-ink-secondary"
+                      >
+                        {idx + 1}
+                      </span>
+                      <input
+                        required
+                        maxLength={80}
+                        placeholder="Exercise name"
+                        value={ex.name}
+                        onChange={(e) =>
+                          setPlanExercises((prev) =>
+                            prev.map((item, i) =>
+                              i === idx ? { ...item, name: e.target.value } : item,
+                            ),
+                          )
+                        }
+                        className={`${ui.inputCompact} min-h-8 flex-1 font-semibold`}
+                      />
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => moveTrainerDraftExercise(idx, -1)}
+                        aria-label="Move exercise up"
+                        className={`${ui.btnGhost} size-7 disabled:opacity-35`}
+                      >
+                        <ArrowUp size={13} aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === planExercises.length - 1}
+                        onClick={() => moveTrainerDraftExercise(idx, 1)}
+                        aria-label="Move exercise down"
+                        className={`${ui.btnGhost} size-7 disabled:opacity-35`}
+                      >
+                        <ArrowDown size={13} aria-hidden="true" />
+                      </button>
+                      {planExercises.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPlanExercises((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          aria-label="Remove exercise"
+                          className={`${ui.btnGhost} size-7 text-danger-text`}
+                        >
+                          <Trash2 size={13} aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <label className="block">
+                        <span className="text-[9px] text-ink-muted">Sets</span>
+                        <input
+                          required
+                          maxLength={12}
+                          value={ex.sets}
+                          onChange={(e) =>
+                            setPlanExercises((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, sets: e.target.value } : item,
+                              ),
+                            )
+                          }
+                          className={`${ui.inputCompact} mt-0.5 min-h-8 text-center`}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-ink-muted">Reps</span>
+                        <input
+                          required
+                          maxLength={16}
+                          value={ex.reps}
+                          onChange={(e) =>
+                            setPlanExercises((prev) =>
+                              prev.map((item, i) =>
+                                i === idx ? { ...item, reps: e.target.value } : item,
+                              ),
+                            )
+                          }
+                          className={`${ui.inputCompact} mt-0.5 min-h-8 text-center`}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-ink-muted">Weight (kg)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1000}
+                          step="0.5"
+                          placeholder="0"
+                          value={ex.targetWeightKg}
+                          onChange={(e) =>
+                            setPlanExercises((prev) =>
+                              prev.map((item, i) =>
+                                i === idx
+                                  ? { ...item, targetWeightKg: e.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className={`${ui.inputCompact} mt-0.5 min-h-8 text-center`}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-ink-muted">
+                          {planDays.length > 0 ? "Day" : "Muscle"}
+                        </span>
+                        {planDays.length > 0 ? (
+                          <select
+                            value={ex.day}
+                            onChange={(e) =>
+                              setPlanExercises((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, day: e.target.value } : item,
+                                ),
+                              )
+                            }
+                            className={`${ui.select} mt-0.5 min-h-8 px-1.5 text-[10px]`}
+                          >
+                            <option value="">All</option>
+                            {planDays.map((d) => (
+                              <option key={d} value={d}>
+                                {d}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <select
+                            value={ex.muscle}
+                            onChange={(e) =>
+                              setPlanExercises((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, muscle: e.target.value } : item,
+                                ),
+                              )
+                            }
+                            className={`${ui.select} mt-0.5 min-h-8 px-1.5 text-[10px]`}
+                          >
+                            {[
+                              "Chest",
+                              "Back",
+                              "Legs",
+                              "Shoulders",
+                              "Arms",
+                              "Core",
+                              "Full body",
+                            ].map((m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {actionError && (
+                <p
+                  role="alert"
+                  className="rounded-lg border border-danger-border bg-danger-soft px-3 py-2 text-[10px] text-danger-text"
+                >
+                  {actionError}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSaving}
+                className={`${ui.btnPrimary} min-h-11 w-full text-[12px]`}
+              >
+                {isSaving && (
+                  <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />
+                )}
+                {isSaving
+                  ? "Saving…"
+                  : editingPlanId
+                    ? "Save Routine Changes"
+                    : "Save Routine"}
               </button>
             </form>
           </section>

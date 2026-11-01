@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  doesGymIdentityMatchSlug,
+  parseGymWorkspacePath,
+} from "@/lib/gym-routing";
+import {
   getMemberTokenFromRequest,
   MEMBER_SESSION_COOKIE,
   verifyMemberSessionToken,
@@ -56,6 +60,15 @@ function isEdgeSessionCompatibleWithHost(
   return true;
 }
 
+function isEdgeSessionCompatibleWithSlug(session: StaffSession, requestedSlug: string): boolean {
+  if (!requestedSlug) return true;
+  if (!session.gymSlug) return true; // Verified authoritatively against MongoDB in gym-context.ts
+  return doesGymIdentityMatchSlug(
+    { slug: session.gymSlug, subdomain: session.gymSubdomain },
+    requestedSlug,
+  );
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const parsedHost = parseTenantHost(request);
@@ -93,21 +106,26 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Platform Console HTML pages (/platform, /platform/login) are strictly separate from gym staff auth
+  // Explicit /platform routes are blocked on individual gym subdomains/custom domains
   if (pathname === "/platform" || pathname.startsWith("/platform/")) {
     if (parsedHost.kind !== "neutral") {
       return new NextResponse(
-        "Platform administration is restricted to the main GymOS platform portal.",
+        "Platform administration is restricted to the main platform portal.",
         { status: 403, headers: { "Content-Type": "text/plain; charset=utf-8" } },
       );
     }
+  }
+
+  // Super Admin Dashboard HTML routes: `/` (on neutral platform hosts) + `/platform` + `/platform/login`
+  const isNeutralSuperAdminRoot = pathname === "/" && parsedHost.kind === "neutral";
+  if (isNeutralSuperAdminRoot || pathname === "/platform" || pathname.startsWith("/platform/")) {
     const platformSession = await verifyPlatformSessionToken(
       getPlatformTokenFromRequest(request, request.cookies.get(PLATFORM_SESSION_COOKIE)?.value),
     );
     if (pathname === "/platform/login") {
       if (platformSession) {
         const consoleUrl = request.nextUrl.clone();
-        consoleUrl.pathname = "/platform";
+        consoleUrl.pathname = "/";
         consoleUrl.search = "";
         return NextResponse.redirect(consoleUrl);
       }
@@ -128,7 +146,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(platLoginUrl);
   }
 
-  // Platform-level routes are restricted strictly to neutral platform hosts and require a platform_admin session
+  // Platform-level APIs are restricted strictly to neutral platform hosts and require a platform_admin session
   if (pathname.startsWith("/api/platform/")) {
     if (parsedHost.kind !== "neutral") {
       return jsonWithCors(
@@ -205,17 +223,76 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  // Path-based isolated Gym Workspace routes: `/gym/<slug>` and `/gym/<slug>/*`
+  const gymPath = parseGymWorkspacePath(pathname);
+  if (gymPath) {
+    if (!gymPath.validSlug) {
+      return NextResponse.next();
+    }
+    const slugCompatible = staffSession
+      ? isEdgeSessionCompatibleWithSlug(staffSession, gymPath.slug)
+      : false;
+    const isGymAuthRoute = gymPath.subPath === "/login" || gymPath.subPath === "/register";
+
+    if (isGymAuthRoute) {
+      if (
+        staffSession &&
+        hostCompatible &&
+        slugCompatible &&
+        parsedHost.kind !== "custom-domain"
+      ) {
+        const gymHome = request.nextUrl.clone();
+        gymHome.pathname = `/gym/${staffSession.gymSlug || gymPath.slug}`;
+        gymHome.search = "";
+        return NextResponse.redirect(gymHome);
+      }
+      return NextResponse.next();
+    }
+
+    if (staffSession && (!hostCompatible || !slugCompatible)) {
+      const gymLogin = request.nextUrl.clone();
+      gymLogin.pathname = `/gym/${gymPath.slug}/login`;
+      gymLogin.search = "";
+      return NextResponse.redirect(gymLogin);
+    }
+
+    if (staffSession) {
+      return NextResponse.next();
+    }
+
+    if (process.env.GYMOS_ALLOW_PREVIEW_ORIGINS === "1") {
+      return NextResponse.next();
+    }
+
+    const gymLogin = request.nextUrl.clone();
+    gymLogin.pathname = `/gym/${gymPath.slug}/login`;
+    gymLogin.search = "";
+    if (gymPath.subPath !== "/") {
+      gymLogin.searchParams.set("next", pathname);
+    }
+    return NextResponse.redirect(gymLogin);
+  }
+
   if (pathname === "/login" || pathname === "/register") {
     if (!staffSession || !hostCompatible || parsedHost.kind === "custom-domain") {
       return NextResponse.next();
     }
     const homeUrl = request.nextUrl.clone();
-    homeUrl.pathname = "/";
+    homeUrl.pathname =
+      parsedHost.kind === "neutral" && staffSession.gymSlug
+        ? `/gym/${staffSession.gymSlug}`
+        : "/";
     homeUrl.search = "";
     return NextResponse.redirect(homeUrl);
   }
 
-  if (staffSession && !hostCompatible) {
+  const headerGymSlug = request.headers.get("x-gymos-gym-slug")?.trim().toLowerCase() ?? "";
+  const apiSlugCompatible =
+    staffSession && headerGymSlug
+      ? isEdgeSessionCompatibleWithSlug(staffSession, headerGymSlug)
+      : true;
+
+  if (staffSession && (!hostCompatible || !apiSlugCompatible)) {
     if (pathname.startsWith("/api/")) {
       return jsonWithCors(
         request,

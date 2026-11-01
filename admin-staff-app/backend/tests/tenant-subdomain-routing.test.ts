@@ -12,7 +12,12 @@ const repoRoot = path.resolve(__dirname, "../../..");
 const frontendDir = path.join(repoRoot, "admin-staff-app/frontend");
 loadEnvConfig(frontendDir);
 
-const mongodBin = "/home/user/.cache/mongo-bin/mongod-x64-debian-7.0.14";
+const mongodBin =
+  [
+    "/home/user/.cache/mongo-bin/mongod-x64-debian-7.0.14",
+    "/usr/bin/mongod",
+    "/usr/local/bin/mongod",
+  ].find((candidate) => fs.existsSync(candidate)) ?? "/usr/bin/mongod";
 const nextBin = path.join(repoRoot, "node_modules/.bin/next");
 
 const TEST_MONGO_PORT = 27091;
@@ -170,7 +175,8 @@ before(async () => {
         GYMOS_STAFF_APP_ORIGINS: "https://gymos.com,https://app.gymos.com",
         GYMOS_MEMBER_APP_ORIGINS: "https://localhost,http://localhost",
       },
-      stdio: "pipe",
+      detached: true,
+      stdio: "ignore",
     },
   );
 
@@ -178,8 +184,12 @@ before(async () => {
 });
 
 after(async () => {
-  if (nextProc && !nextProc.killed) {
-    nextProc.kill("SIGTERM");
+  if (nextProc && nextProc.pid) {
+    try {
+      process.kill(-nextProc.pid, "SIGTERM");
+    } catch {
+      nextProc.kill("SIGTERM");
+    }
     await new Promise((r) => setTimeout(r, 400));
   }
   if (mongodProc && !mongodProc.killed) {

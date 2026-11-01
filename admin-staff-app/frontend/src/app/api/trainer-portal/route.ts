@@ -256,27 +256,48 @@ export async function GET(request: NextRequest) {
     }
 
     const serializedWorkoutPlans = workoutPlans.map((plan) => {
-      const exercises = (
-        plan.exercises as Array<{
+      const rawPlan = plan as unknown as {
+        _id: Types.ObjectId;
+        title: string;
+        targetGoal: string;
+        scheduledDays?: string[];
+        createdByRole?: "staff" | "trainer";
+        createdByTrainerId?: Types.ObjectId | null;
+        createdByName?: string;
+        exercises: Array<{
           exerciseName: string;
           sets: string;
           reps: string;
           restTime: string;
           targetMuscleGroup: string;
-        }>
-      ).map((ex, index) => ({
+          day?: string;
+          targetWeightKg?: number;
+        }>;
+        assignedMemberIds?: unknown[];
+      };
+      const exercises = (rawPlan.exercises ?? []).map((ex, index) => ({
         id: index + 1,
         name: ex.exerciseName,
         sets: ex.sets,
         reps: ex.reps,
         rest: ex.restTime,
         muscle: ex.targetMuscleGroup,
+        day: ex.day ?? "",
+        targetWeightKg: ex.targetWeightKg ?? 0,
       }));
-      const memberIds = (plan.assignedMemberIds ?? []).map((id: unknown) => String(id));
+      const memberIds = (rawPlan.assignedMemberIds ?? []).map((id: unknown) => String(id));
+      const creatorTrainerId = rawPlan.createdByTrainerId
+        ? String(rawPlan.createdByTrainerId)
+        : null;
       return {
-        id: String(plan._id),
-        title: plan.title,
-        targetGoal: plan.targetGoal,
+        id: String(rawPlan._id),
+        title: rawPlan.title,
+        targetGoal: rawPlan.targetGoal,
+        scheduledDays: (rawPlan.scheduledDays ?? []).filter((d) => VALID_DAYS.has(d)),
+        createdByRole: rawPlan.createdByRole === "trainer" ? "trainer" : "staff",
+        createdByTrainerId: creatorTrainerId,
+        createdByName: rawPlan.createdByName ?? "",
+        isOwnedByMe: creatorTrainerId === trainer._id.toString(),
         exercises,
         assignedMemberIds: memberIds,
       };
@@ -624,6 +645,320 @@ export async function POST(request: NextRequest) {
 
       return memberApiResponse(request, {
         assignment: { memberId: member._id.toString(), workoutPlanId: plan._id.toString() },
+      });
+    }
+
+    if (
+      input.action === "create-workout" ||
+      input.action === "update-workout" ||
+      input.action === "duplicate-workout" ||
+      input.action === "delete-workout"
+    ) {
+      const assignedSet = new Set(
+        (trainer.assignedMemberIds ?? []).map((id: unknown) => String(id)),
+      );
+
+      const parseTrainerExercises = (rawList: unknown) => {
+        if (!Array.isArray(rawList) || rawList.length < 1 || rawList.length > 40) {
+          return { error: "Please include between 1 and 40 exercises in the routine." };
+        }
+        const cleaned: Array<{
+          exerciseName: string;
+          sets: string;
+          reps: string;
+          restTime: string;
+          targetMuscleGroup: string;
+          day: string;
+          targetWeightKg: number;
+        }> = [];
+        for (const rawItem of rawList) {
+          if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+            return { error: "Each exercise entry must be an object." };
+          }
+          const ex = rawItem as Record<string, unknown>;
+          const exerciseName =
+            typeof ex.exerciseName === "string"
+              ? ex.exerciseName.trim()
+              : typeof ex.name === "string"
+                ? ex.name.trim()
+                : "";
+          const sets = String(ex.sets ?? "3").trim();
+          const reps = String(ex.reps ?? "10").trim();
+          const restTime =
+            typeof ex.restTime === "string" && ex.restTime.trim()
+              ? ex.restTime.trim()
+              : typeof ex.rest === "string" && ex.rest.trim()
+                ? ex.rest.trim()
+                : "60 sec";
+          const targetMuscleGroup =
+            typeof ex.targetMuscleGroup === "string" && ex.targetMuscleGroup.trim()
+              ? ex.targetMuscleGroup.trim()
+              : typeof ex.muscle === "string" && ex.muscle.trim()
+                ? ex.muscle.trim()
+                : "Full body";
+          const rawDay = typeof ex.day === "string" ? ex.day.trim() : "";
+          const rawW =
+            typeof ex.targetWeightKg === "number"
+              ? ex.targetWeightKg
+              : typeof ex.targetWeightKg === "string"
+                ? Number.parseFloat(ex.targetWeightKg)
+                : 0;
+          const targetWeightKg = Number.isFinite(rawW)
+            ? Math.max(0, Math.min(1000, Math.round(rawW * 100) / 100))
+            : 0;
+          if (
+            !exerciseName ||
+            !sets ||
+            !reps ||
+            exerciseName.length > 80 ||
+            sets.length > 12 ||
+            reps.length > 16 ||
+            restTime.length > 16 ||
+            targetMuscleGroup.length > 40
+          ) {
+            return { error: "Each exercise requires a valid name, sets, and reps." };
+          }
+          cleaned.push({
+            exerciseName,
+            sets,
+            reps,
+            restTime,
+            targetMuscleGroup,
+            day: VALID_DAYS.has(rawDay) ? rawDay : "",
+            targetWeightKg,
+          });
+        }
+        return { exercises: cleaned };
+      };
+
+      const parseDays = (rawDays: unknown): string[] => {
+        if (!Array.isArray(rawDays)) return [];
+        const out: string[] = [];
+        for (const d of rawDays) {
+          if (typeof d === "string" && VALID_DAYS.has(d.trim()) && !out.includes(d.trim())) {
+            out.push(d.trim());
+          }
+        }
+        return out;
+      };
+
+      const assignRoutineToTrainee = async (planId: Types.ObjectId, memberIdRaw: string) => {
+        if (!memberIdRaw) return null;
+        if (!Types.ObjectId.isValid(memberIdRaw)) {
+          return "Select a valid trainee.";
+        }
+        if (!assignedSet.has(memberIdRaw)) {
+          return "You can only assign routines to your assigned trainees.";
+        }
+        const memberDoc = await MemberModel.findOne({ _id: memberIdRaw, gymId });
+        if (!memberDoc) {
+          return "Trainee was not found in your gym.";
+        }
+        await Promise.all([
+          WorkoutPlanModel.updateMany(
+            { gymId, assignedMemberIds: memberDoc._id },
+            { $pull: { assignedMemberIds: memberDoc._id } },
+          ),
+          MemberModel.updateOne(
+            { _id: memberDoc._id, gymId },
+            {
+              $set: {
+                pendingWorkoutPlanId: null,
+                pendingWorkoutAssignedAt: null,
+                pendingWorkoutAssignedBy: "",
+              },
+            },
+          ),
+        ]);
+        await WorkoutPlanModel.updateOne(
+          { _id: planId, gymId },
+          { $addToSet: { assignedMemberIds: memberDoc._id } },
+        );
+        return null;
+      };
+
+      if (input.action === "delete-workout") {
+        const workoutPlanId =
+          typeof input.workoutPlanId === "string" ? input.workoutPlanId.trim() : "";
+        if (!Types.ObjectId.isValid(workoutPlanId)) {
+          return memberApiResponse(request, { error: "Select a valid routine." }, 400);
+        }
+        const plan = await WorkoutPlanModel.findOne({ _id: workoutPlanId, gymId });
+        if (!plan) {
+          return memberApiResponse(request, { error: "Routine was not found." }, 404);
+        }
+        const ownerTrainerId = (
+          plan as unknown as { createdByTrainerId?: Types.ObjectId | null }
+        ).createdByTrainerId;
+        if (!ownerTrainerId || String(ownerTrainerId) !== trainer._id.toString()) {
+          return memberApiResponse(
+            request,
+            { error: "You can only delete routines that you created." },
+            403,
+          );
+        }
+        await WorkoutPlanModel.deleteOne({ _id: plan._id, gymId });
+        await MemberModel.updateMany(
+          { gymId, pendingWorkoutPlanId: plan._id },
+          {
+            $set: {
+              pendingWorkoutPlanId: null,
+              pendingWorkoutAssignedAt: null,
+              pendingWorkoutAssignedBy: "",
+            },
+          },
+        );
+        return memberApiResponse(request, { ok: true, deletedId: plan._id.toString() });
+      }
+
+      if (input.action === "duplicate-workout") {
+        const workoutPlanId =
+          typeof input.workoutPlanId === "string" ? input.workoutPlanId.trim() : "";
+        if (!Types.ObjectId.isValid(workoutPlanId)) {
+          return memberApiResponse(request, { error: "Select a valid routine." }, 400);
+        }
+        const source = await WorkoutPlanModel.findOne({ _id: workoutPlanId, gymId });
+        if (!source) {
+          return memberApiResponse(request, { error: "Routine was not found." }, 404);
+        }
+        const customTitle =
+          typeof input.title === "string" && input.title.trim()
+            ? input.title.trim().slice(0, 80)
+            : `${source.title} (${trainer.name.split(" ")[0]})`.slice(0, 80);
+        const assignToMemberId =
+          typeof input.assignToMemberId === "string" ? input.assignToMemberId.trim() : "";
+        if (assignToMemberId && !assignedSet.has(assignToMemberId)) {
+          return memberApiResponse(
+            request,
+            { error: "You can only assign routines to your assigned trainees." },
+            403,
+          );
+        }
+        const duplicated = await WorkoutPlanModel.create({
+          gymId,
+          title: customTitle,
+          targetGoal: source.targetGoal,
+          scheduledDays: parseDays(
+            (source as unknown as { scheduledDays?: string[] }).scheduledDays,
+          ),
+          createdByRole: "trainer",
+          createdByTrainerId: trainer._id,
+          createdByName: trainer.name,
+          exercises: (source.exercises as Array<Record<string, unknown>>).map((ex) => ({
+            exerciseName: String(ex.exerciseName ?? ""),
+            sets: String(ex.sets ?? "3"),
+            reps: String(ex.reps ?? "10"),
+            restTime: String(ex.restTime ?? "60 sec"),
+            targetMuscleGroup: String(ex.targetMuscleGroup ?? "Full body"),
+            day: typeof ex.day === "string" ? ex.day : "",
+            targetWeightKg: typeof ex.targetWeightKg === "number" ? ex.targetWeightKg : 0,
+          })),
+          assignedMemberIds: [],
+        });
+
+        if (assignToMemberId) {
+          const assignErr = await assignRoutineToTrainee(duplicated._id, assignToMemberId);
+          if (assignErr) {
+            return memberApiResponse(request, { error: assignErr }, 403);
+          }
+        }
+        return memberApiResponse(
+          request,
+          { workoutPlanId: duplicated._id.toString(), title: duplicated.title },
+          201,
+        );
+      }
+
+      const title = typeof input.title === "string" ? input.title.trim() : "";
+      const targetGoal =
+        typeof input.targetGoal === "string" && input.targetGoal.trim()
+          ? input.targetGoal.trim()
+          : "Strength & Fitness";
+      if (!title || title.length > 80 || targetGoal.length > 80) {
+        return memberApiResponse(
+          request,
+          { error: "Routine title is required (max 80 characters)." },
+          400,
+        );
+      }
+      const parsedEx = parseTrainerExercises(input.exercises);
+      if (!parsedEx.exercises) {
+        return memberApiResponse(request, { error: parsedEx.error }, 400);
+      }
+      const scheduledDays = parseDays(input.scheduledDays);
+      const assignToMemberId =
+        typeof input.assignToMemberId === "string" ? input.assignToMemberId.trim() : "";
+      if (assignToMemberId && !assignedSet.has(assignToMemberId)) {
+        return memberApiResponse(
+          request,
+          { error: "You can only assign routines to your assigned trainees." },
+          403,
+        );
+      }
+
+      if (input.action === "create-workout") {
+        const created = await WorkoutPlanModel.create({
+          gymId,
+          title,
+          targetGoal,
+          scheduledDays,
+          createdByRole: "trainer",
+          createdByTrainerId: trainer._id,
+          createdByName: trainer.name,
+          exercises: parsedEx.exercises,
+          assignedMemberIds: [],
+        });
+        if (assignToMemberId) {
+          const assignErr = await assignRoutineToTrainee(created._id, assignToMemberId);
+          if (assignErr) {
+            return memberApiResponse(request, { error: assignErr }, 403);
+          }
+        }
+        return memberApiResponse(
+          request,
+          { workoutPlanId: created._id.toString(), title: created.title },
+          201,
+        );
+      }
+
+      // update-workout (strictly owned by this trainer inside this gym)
+      const workoutPlanId =
+        typeof input.workoutPlanId === "string" ? input.workoutPlanId.trim() : "";
+      if (!Types.ObjectId.isValid(workoutPlanId)) {
+        return memberApiResponse(request, { error: "Select a valid routine." }, 400);
+      }
+      const existing = await WorkoutPlanModel.findOne({ _id: workoutPlanId, gymId });
+      if (!existing) {
+        return memberApiResponse(request, { error: "Routine was not found." }, 404);
+      }
+      const ownerTrainerId = (
+        existing as unknown as { createdByTrainerId?: Types.ObjectId | null }
+      ).createdByTrainerId;
+      if (!ownerTrainerId || String(ownerTrainerId) !== trainer._id.toString()) {
+        return memberApiResponse(
+          request,
+          {
+            error:
+              "You can only edit routines that you created. Duplicate a gym template first to customize it.",
+          },
+          403,
+        );
+      }
+      existing.title = title;
+      existing.targetGoal = targetGoal;
+      existing.set("scheduledDays", scheduledDays);
+      existing.set("exercises", parsedEx.exercises);
+      await existing.save();
+
+      if (assignToMemberId) {
+        const assignErr = await assignRoutineToTrainee(existing._id, assignToMemberId);
+        if (assignErr) {
+          return memberApiResponse(request, { error: assignErr }, 403);
+        }
+      }
+      return memberApiResponse(request, {
+        workoutPlanId: existing._id.toString(),
+        title: existing.title,
       });
     }
 

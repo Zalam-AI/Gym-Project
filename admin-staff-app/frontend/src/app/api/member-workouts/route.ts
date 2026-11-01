@@ -101,6 +101,9 @@ type LeanGymWorkoutPlan = {
   gymId: Types.ObjectId;
   title: string;
   targetGoal: string;
+  scheduledDays?: string[];
+  createdByRole?: "staff" | "trainer";
+  createdByName?: string;
   assignedMemberIds?: Types.ObjectId[];
   exercises: Array<{
     exerciseName: string;
@@ -108,6 +111,8 @@ type LeanGymWorkoutPlan = {
     reps: string;
     restTime: string;
     targetMuscleGroup: string;
+    day?: string;
+    targetWeightKg?: number;
   }>;
   updatedAt?: Date;
 };
@@ -455,6 +460,9 @@ function serializeGymPlan(doc: LeanGymWorkoutPlan, memberId: Types.ObjectId) {
     title: doc.title,
     targetGoal: doc.targetGoal || "General Fitness",
     isAssignedByGym,
+    scheduledDays: (doc.scheduledDays ?? []).filter((d) => VALID_WEEKDAY_SET.has(d)),
+    createdByRole: doc.createdByRole === "trainer" ? "trainer" : "staff",
+    createdByName: doc.createdByName ?? "",
     exercises: (doc.exercises ?? []).map((ex, idx) => ({
       id: idx + 1,
       name: ex.exerciseName,
@@ -462,6 +470,8 @@ function serializeGymPlan(doc: LeanGymWorkoutPlan, memberId: Types.ObjectId) {
       reps: ex.reps,
       rest: ex.restTime,
       muscle: ex.targetMuscleGroup,
+      day: ex.day ?? "",
+      targetWeightKg: ex.targetWeightKg ?? 0,
     })),
   };
 }
@@ -2223,7 +2233,10 @@ export async function POST(request: NextRequest) {
         sets: Math.max(1, Math.min(20, Number.parseInt(ex.sets, 10) || 3)),
         reps: ex.reps || "10",
         restSeconds: parseRestSecondsFromLabel(ex.restTime || "60s"),
-        targetWeightKg: 0,
+        targetWeightKg:
+          typeof ex.targetWeightKg === "number" && ex.targetWeightKg > 0
+            ? ex.targetWeightKg
+            : 0,
         notes: "",
         setPlans: [],
       }));
@@ -2236,14 +2249,57 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const planDays = (gymPlan.scheduledDays ?? []).filter((d): d is RoutineWeekday =>
+        VALID_WEEKDAY_SET.has(d),
+      );
+      const hasPerDayTags = (gymPlan.exercises ?? []).some(
+        (ex) => ex.day && VALID_WEEKDAY_SET.has(ex.day),
+      );
+      let clonedDaySchedule: LeanRoutineDay[] = [];
+      let clonedScheduledDays: RoutineWeekday[] = planDays;
+
+      if (hasPerDayTags || planDays.length > 0) {
+        const activeDaysSet = new Set<RoutineWeekday>(planDays);
+        for (const ex of gymPlan.exercises ?? []) {
+          if (ex.day && VALID_WEEKDAY_SET.has(ex.day)) {
+            activeDaysSet.add(ex.day as RoutineWeekday);
+          }
+        }
+        clonedScheduledDays = ROUTINE_WEEKDAYS.filter((d) => activeDaysSet.has(d));
+        clonedDaySchedule = ROUTINE_WEEKDAYS.map((day) => {
+          if (!activeDaysSet.has(day)) {
+            return { day, isRestDay: true, focusLabel: "Rest", exercises: [] };
+          }
+          const daySpecific = (gymPlan.exercises ?? [])
+            .map((rawEx, idx) => ({ rawEx, mapped: mappedExercises[idx] }))
+            .filter(({ rawEx }) => rawEx.day === day)
+            .map(({ mapped }) => mapped);
+          const dayExList =
+            daySpecific.length > 0
+              ? daySpecific
+              : hasPerDayTags
+                ? []
+                : mappedExercises;
+          if (dayExList.length === 0) {
+            return { day, isRestDay: true, focusLabel: "Rest", exercises: [] };
+          }
+          return {
+            day,
+            isRestDay: false,
+            focusLabel: deriveDayFocusLabel(dayExList),
+            exercises: dayExList,
+          };
+        });
+      }
+
       const created = await MemberRoutineModel.create({
         memberId,
         gymId: memberGymId,
         title: customTitle,
         targetGoal: gymPlan.targetGoal || "General Fitness",
         notes: `Customized from gym routine: ${gymPlan.title}`.slice(0, 240),
-        scheduledDays: [],
-        daySchedule: [],
+        scheduledDays: clonedScheduledDays,
+        daySchedule: clonedDaySchedule,
         sourceGymPlanId: gymPlan._id,
         exercises: mappedExercises,
         isActive: false,

@@ -5,6 +5,8 @@ export const AUDIT_TARGET_TYPES = [
   "platform_config",
   "support",
   "session",
+  "saas_plan",
+  "saas_payment",
 ] as const;
 
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number];

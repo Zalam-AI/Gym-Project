@@ -38,7 +38,10 @@ import {
   type ActiveWorkoutSession,
   type ActiveWorkoutSet,
 } from "@/components/active-workout-player";
-import type { ExerciseMediaCatalogEntry } from "@/lib/exercise-media";
+import {
+  matchesExerciseQuery,
+  type ExerciseMediaCatalogEntry,
+} from "@/lib/exercise-media";
 import type { AchievementMilestone } from "@/lib/workout-achievements";
 import {
   mobileFetch,
@@ -71,6 +74,8 @@ export type GymAssignedExercise = {
   reps: string;
   rest: string;
   muscle: string;
+  day?: string;
+  targetWeightKg?: number;
 };
 
 export type GymAssignedWorkoutPlan = {
@@ -78,6 +83,9 @@ export type GymAssignedWorkoutPlan = {
   title: string;
   targetGoal: string;
   isAssignedByGym?: boolean;
+  scheduledDays?: string[];
+  createdByRole?: "staff" | "trainer";
+  createdByName?: string;
   exercises: GymAssignedExercise[];
 };
 
@@ -755,6 +763,17 @@ export function MemberWorkoutHub({
 
   // Active Guided Workout Session state + Dual Persistence
   const [activeSession, setActiveSession] = useState<ActiveWorkoutSession | null>(null);
+  const [isWorkoutMinimized, setIsWorkoutMinimized] = useState(false);
+  const [completedSummary, setCompletedSummary] = useState<{
+    routineTitle: string;
+    durationSeconds: number;
+    completedSets: number;
+    totalVolumeKg: number;
+    exercises: Array<{
+      name: string;
+      sets: Array<{ setNumber: number; weightKg: number; reps: number }>;
+    }>;
+  } | null>(null);
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
@@ -1028,13 +1047,15 @@ export function MemberWorkoutHub({
     };
   }, [activeStorageKey, offlineQueueKey, onWorkoutDataChanged, syncDraftToBackend]);
 
-  // Open Ready-to-Train Workout Entry when triggered after QR check-in
+  // Open Ready-to-Train Workout Entry when triggered after QR check-in or Home Resume
   useEffect(() => {
     if (workoutEntryNonce > 0 && workoutEntryNonce !== handledEntryNonceRef.current) {
       handledEntryNonceRef.current = workoutEntryNonce;
       if (!latestSessionRef.current) {
         setShowAlternativeRoutinesInEntry(false);
         setIsEntryModalOpen(true);
+      } else {
+        setIsWorkoutMinimized(false);
       }
     }
   }, [workoutEntryNonce]);
@@ -1112,6 +1133,8 @@ export function MemberWorkoutHub({
     setHubSuccess("");
     setCelebrationPrs([]);
     setPostWorkoutRecommendations([]);
+    setCompletedSummary(null);
+    setIsWorkoutMinimized(false);
     setIsEntryModalOpen(false);
     latestSessionRef.current = sessionObj;
     safeLocalSet(activeStorageKey, JSON.stringify(sessionObj));
@@ -1119,17 +1142,12 @@ export function MemberWorkoutHub({
     void syncDraftToBackend(sessionObj);
   }
 
-  // Filtered library in Searchable Exercise Selector
+  // Filtered library in Searchable Exercise Selector (supports both English & Egyptian Gym Arabic!)
   const filteredExerciseLibrary = useMemo(() => {
-    const q = pickerQuery.trim().toLowerCase();
+    const q = pickerQuery.trim();
     return EXERCISE_LIBRARY.filter((item) => {
       const matchesMuscle = pickerMuscle === "All" || item.muscle === pickerMuscle;
-      const matchesQuery =
-        !q ||
-        item.name.toLowerCase().includes(q) ||
-        item.muscle.toLowerCase().includes(q) ||
-        item.equipment.toLowerCase().includes(q);
-      return matchesMuscle && matchesQuery;
+      return matchesMuscle && matchesExerciseQuery(item, q);
     });
   }, [pickerQuery, pickerMuscle]);
 
@@ -1178,7 +1196,9 @@ export function MemberWorkoutHub({
               ? String(rememberedSet.weightKg)
               : prev && prev.lastWeightKg > 0
                 ? String(prev.lastWeightKg)
-                : "0";
+                : ex.targetWeightKg && ex.targetWeightKg > 0
+                  ? String(ex.targetWeightKg)
+                  : "0";
           const reps =
             rememberedSet && rememberedSet.reps > 0
               ? String(rememberedSet.reps)
@@ -1460,10 +1480,35 @@ export function MemberWorkoutHub({
         throw new Error(data.error ?? "Unable to save workout session.");
       }
 
+      let summaryCompletedSets = 0;
+      let summaryVolumeKg = 0;
+      const summaryExercises = snap.exercises
+        .map((ex) => {
+          const doneSets = ex.sets
+            .filter((s) => s.completed)
+            .map((s) => {
+              const w = Math.max(0, Number.parseFloat(s.weightKg) || 0);
+              const r = Math.max(0, Number.parseInt(s.reps, 10) || 0);
+              summaryCompletedSets += 1;
+              summaryVolumeKg += w * r;
+              return { setNumber: s.setNumber, weightKg: w, reps: r };
+            });
+          return { name: ex.name, sets: doneSets };
+        })
+        .filter((ex) => ex.sets.length > 0);
+
       setActiveSession(null);
+      setIsWorkoutMinimized(false);
       latestSessionRef.current = null;
       safeLocalRemove(activeStorageKey);
       needsDraftSyncRef.current = false;
+      setCompletedSummary({
+        routineTitle: snap.routineTitle,
+        durationSeconds,
+        completedSets: summaryCompletedSets,
+        totalVolumeKg: Math.round(summaryVolumeKg * 10) / 10,
+        exercises: summaryExercises,
+      });
       setCelebrationPrs(data.newPersonalRecords ?? []);
       setCelebrationMilestones(data.newlyUnlockedAchievements ?? []);
       setPostWorkoutRecommendations(data.progressionRecommendations ?? []);
@@ -1929,9 +1974,9 @@ export function MemberWorkoutHub({
   }
 
   // -------------------------------------------------------------------
-  // VIEW 1: DEDICATED INTERACTIVE WORKOUT SESSION SCREEN
+  // VIEW 1: DEDICATED FULL-SCREEN INTERACTIVE WORKOUT SESSION SCREEN
   // -------------------------------------------------------------------
-  if (activeSession) {
+  if (activeSession && !isWorkoutMinimized) {
     return (
       <ActiveWorkoutPlayer
         session={activeSession}
@@ -1946,7 +1991,113 @@ export function MemberWorkoutHub({
         onRespondPriorProgression={respondToProgressionApi}
         onFinishWorkout={finalizeActiveWorkoutSession}
         onDiscardSession={discardActiveWorkoutSession}
+        onMinimizeWorkout={() => setIsWorkoutMinimized(true)}
       />
+    );
+  }
+
+  // Full-Screen Clean Workout Completion Summary
+  if (completedSummary) {
+    return (
+      <section
+        aria-label="Workout completed summary"
+        className="fixed inset-0 z-50 flex flex-col bg-canvas text-ink"
+      >
+        <div className="mx-auto flex h-full w-full max-w-[460px] flex-col overflow-y-auto px-5 py-6">
+          <div className="text-center">
+            <span className="mx-auto grid size-14 place-items-center rounded-2xl border border-accent-border bg-accent-soft text-accent-text">
+              <Trophy size={26} aria-hidden="true" />
+            </span>
+            <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text">
+              Workout Complete
+            </p>
+            <h2 className="mt-1 text-[22px] font-bold tracking-[-0.03em] text-ink">
+              {completedSummary.routineTitle}
+            </h2>
+            <p className="mt-1 text-[11px] text-ink-secondary">
+              Saved to your workout history &amp; progress charts
+            </p>
+          </div>
+
+          <div className={`${ui.cardElevated} mt-5 grid grid-cols-3 gap-2 p-4 text-center`}>
+            <div>
+              <p className="text-[10px] text-ink-secondary">Duration</p>
+              <p data-no-translate="true" className="mt-1 text-[16px] font-bold text-ink">
+                {Math.max(1, Math.round(completedSummary.durationSeconds / 60))} min
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-ink-secondary">Sets Done</p>
+              <p data-no-translate="true" className="mt-1 text-[16px] font-bold text-ink">
+                {completedSummary.completedSets}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-ink-secondary">Volume</p>
+              <p
+                data-no-translate="true"
+                className="mt-1 text-[16px] font-bold text-accent-text"
+              >
+                {completedSummary.totalVolumeKg.toLocaleString()} kg
+              </p>
+            </div>
+          </div>
+
+          {celebrationPrs.length > 0 && (
+            <div className="mt-3.5 rounded-2xl border border-accent-border bg-accent-soft p-3.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
+                Personal Records Unlocked
+              </p>
+              <ul className="mt-1.5 space-y-1">
+                {celebrationPrs.map((pr) => (
+                  <li
+                    key={pr.exerciseName}
+                    className="flex items-center justify-between text-[11px] font-semibold text-ink"
+                  >
+                    <span className="truncate">{pr.exerciseName}</span>
+                    <span data-no-translate="true" className="text-accent-text">
+                      {pr.weightKg > 0 ? `${pr.weightKg} kg × ${pr.reps}` : `${pr.reps} reps`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="mt-4 space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
+              Logged Exercises
+            </p>
+            {completedSummary.exercises.map((ex, i) => (
+              <div key={`${ex.name}-${i}`} className={`${ui.card} p-3`}>
+                <p className="text-[12px] font-semibold text-ink">{ex.name}</p>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {ex.sets.map((s) => (
+                    <span
+                      key={s.setNumber}
+                      data-no-translate="true"
+                      className="rounded-lg border border-line bg-subtle px-2 py-0.5 text-[10px] font-semibold text-ink-secondary"
+                    >
+                      S{s.setNumber}: {s.weightKg > 0 ? `${s.weightKg} kg × ` : ""}
+                      {s.reps}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-auto pt-5">
+            <button
+              type="button"
+              onClick={() => setCompletedSummary(null)}
+              className={`${ui.btnPrimary} min-h-12 w-full rounded-2xl text-[13px]`}
+            >
+              Done · Back to App
+            </button>
+          </div>
+        </div>
+      </section>
     );
   }
 
@@ -1971,7 +2122,10 @@ export function MemberWorkoutHub({
 
   return (
     <section aria-labelledby="workout-hub-heading" className="space-y-4">
-      <div className="flex items-start justify-between gap-2">
+      <div
+        data-tour-id="workout-hub-actions"
+        className="flex items-start justify-between gap-2"
+      >
         <div>
           <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-muted">
             Training &amp; Routines
@@ -2002,6 +2156,35 @@ export function MemberWorkoutHub({
           </button>
         </div>
       </div>
+
+      {/* Paused / Minimized Active Workout Resume Card */}
+      {activeSession && isWorkoutMinimized && (
+        <div
+          role="region"
+          aria-label="Paused workout session"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-accent bg-accent-soft p-3.5"
+        >
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
+              Workout in Progress
+            </p>
+            <p className="mt-0.5 truncate text-[13px] font-semibold text-ink">
+              {activeSession.routineTitle}
+            </p>
+            <p className="text-[10px] text-ink-secondary">
+              Sets saved automatically · Ready to continue
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsWorkoutMinimized(false)}
+            className={`${ui.btnPrimary} min-h-10 shrink-0 rounded-xl px-3.5 text-[11px]`}
+          >
+            <Play size={13} aria-hidden="true" />
+            Resume
+          </button>
+        </div>
+      )}
 
       {/* Dedicated 1-Tap Free Workout Entry (Never overwrites active routine) */}
       <div className={`${ui.card} flex items-center justify-between gap-3 p-3.5`}>
@@ -2531,7 +2714,7 @@ export function MemberWorkoutHub({
                                   [routine.id]: d.day,
                                 }))
                               }
-                              className={`rounded-xl border px-2.5 py-1 text-left transition-colors ${
+                              className={`rounded-xl border px-2.5 py-1 text-start transition-colors ${
                                 isSelected
                                   ? "border-accent bg-accent-soft text-accent-text"
                                   : "border-line bg-subtle text-ink-secondary hover:text-ink"
@@ -2564,7 +2747,7 @@ export function MemberWorkoutHub({
                                   showRowDemo ? null : rowDemoKey,
                                 )
                               }
-                              className="flex w-full items-center justify-between gap-2 text-left text-[10px]"
+                              className="flex w-full items-center justify-between gap-2 text-start text-[10px]"
                             >
                               <span className="truncate font-medium text-ink">
                                 {ex.name}
@@ -2842,6 +3025,8 @@ export function MemberWorkoutHub({
                               <Sparkles size={10} aria-hidden="true" />
                               Assigned by Coach
                             </span>
+                          ) : plan.createdByRole === "trainer" ? (
+                            <span className={ui.badgeAccent}>Coach Routine</span>
                           ) : (
                             <span className={ui.badgeNeutral}>Gym Routine</span>
                           )}
@@ -2856,10 +3041,24 @@ export function MemberWorkoutHub({
                           {plan.title}
                         </h3>
                         <p className="mt-0.5 text-[10px] text-ink-secondary">
-                          {plan.isAssignedByGym && trainer
-                            ? `Coach ${trainer.name} · ${plan.targetGoal}`
-                            : plan.targetGoal}
+                          {plan.createdByRole === "trainer" && plan.createdByName
+                            ? `Coach ${plan.createdByName} · ${plan.targetGoal}`
+                            : plan.isAssignedByGym && trainer
+                              ? `Coach ${trainer.name} · ${plan.targetGoal}`
+                              : plan.targetGoal}
                         </p>
+                        {plan.scheduledDays && plan.scheduledDays.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {plan.scheduledDays.map((day) => (
+                              <span
+                                key={day}
+                                className="rounded-md border border-line bg-subtle px-1.5 py-0.5 text-[9px] font-semibold text-ink-secondary"
+                              >
+                                {day}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <span className={ui.badgeNeutral}>
                         {plan.exercises.length}{" "}
@@ -2880,14 +3079,19 @@ export function MemberWorkoutHub({
                                   showGymDemo ? null : gymRowKey,
                                 )
                               }
-                              className="flex w-full items-center justify-between gap-2 text-left"
+                              className="flex w-full items-center justify-between gap-2 text-start"
                             >
                               <div className="min-w-0">
                                 <p className="truncate text-[11px] font-semibold text-ink">
                                   {idx + 1}. {ex.name}
                                 </p>
                                 <p className="text-[9px] text-ink-secondary">
-                                  {ex.sets} sets · {ex.reps} reps · {ex.rest} rest
+                                  {ex.day ? `${ex.day} · ` : ""}
+                                  {ex.sets} sets · {ex.reps} reps
+                                  {ex.targetWeightKg && ex.targetWeightKg > 0
+                                    ? ` · ${ex.targetWeightKg} kg`
+                                    : ""}{" "}
+                                  · {ex.rest} rest
                                 </p>
                               </div>
                               <div className="flex shrink-0 items-center gap-1.5">
@@ -3145,7 +3349,7 @@ export function MemberWorkoutHub({
                             <button
                               type="button"
                               onClick={() => setSelectedBuilderDay(d.day)}
-                              className="flex w-full items-center justify-between gap-2 text-left text-[10px]"
+                              className="flex w-full items-center justify-between gap-2 text-start text-[10px]"
                             >
                               <span
                                 className={`font-semibold ${
@@ -3770,7 +3974,7 @@ export function MemberWorkoutHub({
                             type="button"
                             aria-pressed={isSelected}
                             onClick={() => togglePickerSelection(lib.name)}
-                            className="min-w-0 flex-1 text-left"
+                            className="min-w-0 flex-1 text-start"
                           >
                             <p className="truncate text-[12px] font-semibold text-ink">
                               {lib.name}
@@ -3826,7 +4030,7 @@ export function MemberWorkoutHub({
                       <button
                         type="button"
                         onClick={() => togglePickerSelection(pickerQuery.trim())}
-                        className="flex w-full items-center justify-between rounded-xl border border-dashed border-accent-border bg-accent-soft p-3 text-left"
+                        className="flex w-full items-center justify-between rounded-xl border border-dashed border-accent-border bg-accent-soft p-3 text-start"
                       >
                         <div>
                           <p className="text-[12px] font-semibold text-accent-text">
@@ -4081,7 +4285,7 @@ export function MemberWorkoutHub({
                                 key={d.day}
                                 type="button"
                                 onClick={() => startFromPersonalRoutine(routine, d.day)}
-                                className="rounded-xl border border-line-strong bg-subtle px-2.5 py-1.5 text-left text-[10px] font-semibold text-ink transition-colors hover:border-accent hover:text-accent-text"
+                                className="rounded-xl border border-line-strong bg-subtle px-2.5 py-1.5 text-start text-[10px] font-semibold text-ink transition-colors hover:border-accent hover:text-accent-text"
                               >
                                 {d.day} · {d.focusLabel}
                               </button>
@@ -4256,13 +4460,7 @@ export function MemberWorkoutHub({
                 if (libraryMuscle !== "All" && lib.muscle !== libraryMuscle) {
                   return false;
                 }
-                const q = libraryQuery.trim().toLowerCase();
-                if (!q) return true;
-                return (
-                  lib.name.toLowerCase().includes(q) ||
-                  lib.muscle.toLowerCase().includes(q) ||
-                  lib.equipment.toLowerCase().includes(q)
-                );
+                return matchesExerciseQuery(lib, libraryQuery);
               }).map((lib, idx) => {
                 const prev = exerciseDefaults[lib.name.toLowerCase()];
                 const libDemoKey = `lib-${lib.name}`;
@@ -4279,7 +4477,7 @@ export function MemberWorkoutHub({
                       onClick={() =>
                         setRoutinePreviewExerciseKey(showLibDemo ? "__none__" : libDemoKey)
                       }
-                      className="flex w-full items-center justify-between gap-2 text-left"
+                      className="flex w-full items-center justify-between gap-2 text-start"
                     >
                       <div className="min-w-0">
                         <p className="truncate text-[12px] font-semibold text-ink">

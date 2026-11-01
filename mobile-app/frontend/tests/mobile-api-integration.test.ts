@@ -23,12 +23,16 @@ import {
   evaluateExerciseProgression,
 } from "../src/lib/workout-progression";
 import {
+  ARABIC_EXERCISE_DICTIONARY,
+  getArabicExerciseName,
   GYMOS_EXERCISE_LIBRARY,
   markExerciseMediaUrlFailed,
+  matchesExerciseQuery,
   registerExerciseMediaAdapter,
   resolveExerciseMedia,
   unregisterExerciseMediaAdapter,
 } from "../src/lib/exercise-media";
+import { translateToArabic } from "../src/lib/i18n";
 import {
   evaluateMemberAchievements,
   isValidCompletedWorkoutLog,
@@ -2334,5 +2338,371 @@ describe("GymOS Mobile Hosted Backend Integration Suite", () => {
       },
     );
     assert.equal(crossSaveAttempt.status, 404);
+  });
+
+  it("17. Localizes all 27 Exercise Library exercises into natural Egyptian gym Arabic and supports EN/AR search", () => {
+    assert.equal(GYMOS_EXERCISE_LIBRARY.length, 27);
+    for (const ex of GYMOS_EXERCISE_LIBRARY) {
+      assert.ok(ex.arabicName && ex.arabicName.length >= 4, `Missing Arabic name for ${ex.name}`);
+      assert.match(ex.arabicName, /[\u0600-\u06FF]/, `Expected Arabic script for ${ex.name}`);
+      assert.equal(getArabicExerciseName(ex.name), ex.arabicName);
+      assert.equal(ARABIC_EXERCISE_DICTIONARY[ex.name], ex.arabicName);
+      assert.equal(translateToArabic(ex.name), ex.arabicName);
+    }
+
+    assert.equal(translateToArabic("Barbell Bench Press"), "ضغط الصدر بالبار");
+    assert.equal(translateToArabic("Barbell Back Squat"), "القرفصاء بالبار (سكوات)");
+    assert.equal(translateToArabic("Lat Pulldown"), "سحب أمامي للظهر");
+    assert.equal(translateToArabic("Barbell Bicep Curl"), "ثني الذراع للبايسبس بالبار");
+    assert.equal(translateToArabic("1. Barbell Bench Press"), "1. ضغط الصدر بالبار");
+    assert.equal(translateToArabic("Off"), "متوقف");
+    assert.equal(translateToArabic("Exercise Setup"), "إعداد التمرين");
+    assert.equal(translateToArabic("Home & Today's Workout"), "الرئيسية وتمرين اليوم");
+    assert.equal(translateToArabic("Replay App Tutorial"), "إعادة عرض دليل التطبيق");
+
+    const bench = GYMOS_EXERCISE_LIBRARY.find((e) => e.name === "Barbell Bench Press")!;
+    const squat = GYMOS_EXERCISE_LIBRARY.find((e) => e.name === "Barbell Back Squat")!;
+    assert.equal(matchesExerciseQuery(bench, "bench"), true);
+    assert.equal(matchesExerciseQuery(bench, "ضغط الصدر"), true);
+    assert.equal(matchesExerciseQuery(bench, "بنش"), true);
+    assert.equal(matchesExerciseQuery(squat, "قرفصاء"), true);
+    assert.equal(matchesExerciseQuery(squat, "سكوات"), true);
+    assert.equal(matchesExerciseQuery(squat, "بنش"), false);
+  });
+
+  it("18. Enforces Trainer Routine Freedom within strict ownership and assigned-trainee boundaries", async () => {
+    // Login as Coach Karim Mansour (seeded trainer at GymOS Elite)
+    const trainerLogin = await hostedMobileRequest<{
+      sessionToken?: string;
+    }>("/api/auth/member/login", {
+      method: "POST",
+      body: {
+        accountType: "trainer",
+        identifier: "karim.mansour@example.com",
+        password: "TrainerPass123!",
+      },
+    });
+    assert.equal(trainerLogin.status, 200, `Trainer login failed: ${trainerLogin.text}`);
+    const trainerToken = trainerLogin.json.sessionToken!;
+    assert.ok(trainerToken);
+
+    const portalBefore = await hostedMobileRequest<{
+      trainees?: Array<{ id: string; name: string }>;
+      workoutPlans?: Array<{ id: string; title: string; createdByRole?: string; isOwnedByMe?: boolean }>;
+    }>("/api/trainer-portal", { token: trainerToken });
+    assert.equal(portalBefore.status, 200);
+    const assignedTraineeId = portalBefore.json.trainees?.[0]?.id;
+    assert.ok(assignedTraineeId, "Expected seeded assigned trainee for Coach Karim");
+
+    const staffTemplate = portalBefore.json.workoutPlans?.find(
+      (p) => p.createdByRole === "staff" || !p.isOwnedByMe,
+    );
+    assert.ok(staffTemplate, "Expected at least one Gym Staff workout template");
+
+    // 1. Trainer CANNOT edit or delete a Gym Staff template
+    const forbiddenEdit = await hostedMobileRequest<{ error?: string }>("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: {
+        action: "update-workout",
+        workoutPlanId: staffTemplate.id,
+        title: "Unauthorized Overwrite",
+        targetGoal: "Strength",
+        exercises: [
+          {
+            exerciseName: "Barbell Bench Press",
+            sets: "4",
+            reps: "8",
+            restTime: "90 sec",
+            targetMuscleGroup: "Chest",
+          },
+        ],
+      },
+    });
+    assert.equal(forbiddenEdit.status, 403);
+
+    const forbiddenDelete = await hostedMobileRequest<{ error?: string }>("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: {
+        action: "delete-workout",
+        workoutPlanId: staffTemplate.id,
+      },
+    });
+    assert.equal(forbiddenDelete.status, 403);
+
+    // 2. Trainer CAN duplicate a Gym Staff template into their own editable copy
+    const duplicated = await hostedMobileRequest<{
+      workoutPlanId?: string;
+      title?: string;
+    }>("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: {
+        action: "duplicate-workout",
+        workoutPlanId: staffTemplate.id,
+      },
+    });
+    assert.equal(duplicated.status, 201);
+    const duplicatedPlanId = duplicated.json.workoutPlanId!;
+    assert.ok(duplicatedPlanId);
+
+    // 3. Trainer CAN create a custom Coach Routine with scheduledDays & targetWeightKg and assign to assigned trainee
+    const createdCoachPlan = await hostedMobileRequest<{
+      workoutPlanId?: string;
+      title?: string;
+    }>("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: {
+        action: "create-workout",
+        title: "Coach Karim Hypertrophy A",
+        targetGoal: "Strength & Hypertrophy",
+        scheduledDays: ["Sat", "Tue"],
+        assignToMemberId: assignedTraineeId,
+        exercises: [
+          {
+            exerciseName: "Barbell Bench Press",
+            sets: "4",
+            reps: "8",
+            restTime: "90 sec",
+            targetMuscleGroup: "Chest",
+            day: "Sat",
+            targetWeightKg: 82.5,
+          },
+          {
+            exerciseName: "Lat Pulldown",
+            sets: "3",
+            reps: "10",
+            restTime: "75 sec",
+            targetMuscleGroup: "Back",
+            day: "Tue",
+            targetWeightKg: 60,
+          },
+        ],
+      },
+    });
+    assert.equal(createdCoachPlan.status, 201);
+    const coachPlanId = createdCoachPlan.json.workoutPlanId!;
+    assert.ok(coachPlanId);
+
+    // Verify GET /api/trainer-portal returns both trainer-owned routines with scheduledDays & targetWeightKg
+    const portalAfterCreate = await hostedMobileRequest<{
+      workoutPlans?: Array<{
+        id: string;
+        title: string;
+        scheduledDays?: string[];
+        createdByRole?: string;
+        isOwnedByMe?: boolean;
+        exercises: Array<{ name: string; day?: string; targetWeightKg?: number }>;
+      }>;
+    }>("/api/trainer-portal", { token: trainerToken });
+    const fetchedDup = portalAfterCreate.json.workoutPlans?.find((p) => p.id === duplicatedPlanId);
+    assert.equal(fetchedDup?.createdByRole, "trainer");
+    assert.equal(fetchedDup?.isOwnedByMe, true);
+    const fetchedCreated = portalAfterCreate.json.workoutPlans?.find((p) => p.id === coachPlanId);
+    assert.deepEqual(fetchedCreated?.scheduledDays, ["Sat", "Tue"]);
+    assert.equal(fetchedCreated?.exercises[0]?.targetWeightKg, 82.5);
+
+    // 4. Trainer CAN update and delete their own routine, and CANNOT assign to an unassigned member
+    const unassignedReg = await hostedMobileRequest<{
+      member?: { id: string };
+    }>("/api/auth/member/register", {
+      method: "POST",
+      body: {
+        accountType: "member",
+        fullName: "Unassigned Gym Visitor",
+        phone: `0119${Date.now().toString().slice(-7)}`,
+        password: "MemberPass123!",
+      },
+    });
+    assert.equal(unassignedReg.status, 201);
+
+    const forbiddenAssign = await hostedMobileRequest<{ error?: string }>("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: {
+        action: "update-workout",
+        workoutPlanId: coachPlanId,
+        title: "Coach Karim Hypertrophy A+",
+        targetGoal: "Strength & Hypertrophy",
+        assignToMemberId: unassignedReg.json.member!.id,
+        exercises: [
+          {
+            exerciseName: "Barbell Bench Press",
+            sets: "4",
+            reps: "8",
+            restTime: "90 sec",
+            targetMuscleGroup: "Chest",
+            targetWeightKg: 85,
+          },
+        ],
+      },
+    });
+    assert.equal(forbiddenAssign.status, 403);
+
+    const cleanUpdate = await hostedMobileRequest<{ workoutPlanId?: string; title?: string }>(
+      "/api/trainer-portal",
+      {
+        method: "POST",
+        token: trainerToken,
+        body: {
+          action: "update-workout",
+          workoutPlanId: coachPlanId,
+          title: "Coach Karim Hypertrophy Updated",
+          targetGoal: "Strength & Hypertrophy",
+          scheduledDays: ["Sat", "Wed"],
+          exercises: [
+            {
+              exerciseName: "Barbell Bench Press",
+              sets: "4",
+              reps: "8",
+              restTime: "90 sec",
+              targetMuscleGroup: "Chest",
+              targetWeightKg: 85,
+            },
+          ],
+        },
+      },
+    );
+    assert.equal(cleanUpdate.status, 200);
+    assert.equal(cleanUpdate.json.title, "Coach Karim Hypertrophy Updated");
+
+    const delDup = await hostedMobileRequest("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: { action: "delete-workout", workoutPlanId: duplicatedPlanId },
+    });
+    assert.equal(delDup.status, 200);
+    await hostedMobileRequest("/api/trainer-portal", {
+      method: "POST",
+      token: trainerToken,
+      body: { action: "delete-workout", workoutPlanId: coachPlanId },
+    });
+  });
+
+  it("19. Persists Focused Workout session across interruptions and records actual performed weights and reps", async () => {
+    const suffix = Date.now().toString().slice(-6);
+    const reg = await hostedMobileRequest<{ sessionToken?: string }>("/api/auth/member/register", {
+      method: "POST",
+      body: {
+        accountType: "member",
+        fullName: `Focused Lifter ${suffix}`,
+        phone: `0108${suffix}9`,
+        password: "MemberPass123!",
+      },
+    });
+    assert.equal(reg.status, 201);
+    const token = reg.json.sessionToken!;
+
+    // 1. Sync an active Focused Workout session mid-set (simulating reload/interruption)
+    const clientSessionId = `focused-${suffix}`;
+    const startedAtIso = new Date(Date.now() - 600_000).toISOString();
+    const saveActive = await hostedMobileRequest<{
+      ok?: boolean;
+      activeWorkoutSession?: {
+        clientSessionId: string;
+        currentExerciseIndex: number;
+        exercises: Array<{ sets: Array<{ weightKg: string; reps: string; completed: boolean }> }>;
+      };
+    }>("/api/member-workouts", {
+      method: "POST",
+      token,
+      body: {
+        action: "sync-active-session",
+        clientSessionId,
+        sourceType: "free_workout",
+        routineId: null,
+        routineTitle: "Focused Push Day",
+        dayLabel: "",
+        targetGoal: "Strength & Hypertrophy",
+        startedAtIso,
+        pausedSeconds: 0,
+        isPaused: false,
+        lastPauseStartedIso: null,
+        restEndsAtIso: null,
+        restDurationSeconds: 60,
+        currentExerciseIndex: 0,
+        clientUpdatedAtMs: Date.now(),
+        exercises: [
+          {
+            name: "Barbell Bench Press",
+            muscle: "Chest",
+            restSeconds: 60,
+            targetRepsLabel: "12",
+            notes: "",
+            sets: [
+              // Planned 12 reps @ 60 kg -> member performed 10 reps on Set 1
+              { setNumber: 1, weightKg: 60, reps: 10, completed: true },
+              { setNumber: 2, weightKg: 60, reps: 12, completed: false },
+              { setNumber: 3, weightKg: 60, reps: 12, completed: false },
+            ],
+          },
+        ],
+      },
+    });
+    assert.equal(saveActive.status, 200);
+
+    // 2. Reload workout state and verify session survived interruption
+    const resumed = await hostedMobileRequest<{
+      activeWorkoutSession?: {
+        clientSessionId: string;
+        exercises: Array<{ sets: Array<{ weightKg: string; reps: string; completed: boolean }> }>;
+      } | null;
+    }>("/api/member-workouts", { token });
+    assert.equal(resumed.status, 200);
+    assert.equal(resumed.json.activeWorkoutSession?.clientSessionId, clientSessionId);
+    assert.equal(String(resumed.json.activeWorkoutSession?.exercises[0]?.sets[0]?.reps), "10");
+
+    // 3. Complete remaining sets with ACTUAL performed values (Set 2: 14 reps, Set 3: 62.5 kg x 11 reps) + 1-10 difficulty
+    const finished = await hostedMobileRequest<{
+      log?: {
+        id: string;
+        totalSetsCompleted: number;
+        totalRepsCompleted: number;
+        exercises: Array<{
+          name: string;
+          difficultyRating: number | null;
+          sets: Array<{ weightKg: number; reps: number; completed: boolean }>;
+        }>;
+      };
+    }>("/api/member-workouts", {
+      method: "POST",
+      token,
+      body: {
+        action: "log-workout",
+        sourceType: "free_workout",
+        routineTitle: "Focused Push Day",
+        targetGoal: "Strength & Hypertrophy",
+        durationSeconds: 900,
+        effortRating: 4,
+        exercises: [
+          {
+            exerciseName: "Barbell Bench Press",
+            targetMuscleGroup: "Chest",
+            targetSets: 3,
+            targetRepsLabel: "12",
+            difficultyRating: 7,
+            sets: [
+              { setNumber: 1, weightKg: 60, reps: 10, completed: true },
+              { setNumber: 2, weightKg: 60, reps: 14, completed: true },
+              { setNumber: 3, weightKg: 62.5, reps: 11, completed: true },
+            ],
+          },
+        ],
+      },
+    });
+    assert.equal(finished.status, 201);
+    assert.equal(finished.json.log?.totalSetsCompleted, 3);
+    assert.equal(finished.json.log?.totalRepsCompleted, 35);
+    assert.deepEqual(
+      finished.json.log?.exercises[0]?.sets.map((s) => ({ w: s.weightKg, r: s.reps })),
+      [
+        { w: 60, r: 10 },
+        { w: 60, r: 14 },
+        { w: 62.5, r: 11 },
+      ],
+    );
+    assert.equal(finished.json.log?.exercises[0]?.difficultyRating, 7);
   });
 });

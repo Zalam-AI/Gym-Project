@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { startOfGymDay } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import { enforceGymPlanLimit } from "gymos-admin-backend/lib/saas-enforcement";
 import { generateTrainerInviteCode } from "gymos-admin-backend/lib/trainer-code";
 import MemberModel from "gymos-admin-backend/models/member";
 import TrainerModel from "gymos-admin-backend/models/trainer";
@@ -331,6 +332,11 @@ export async function POST(request: Request) {
         );
       }
 
+      const trainerLimit = await enforceGymPlanLimit(gymId, "trainers");
+      if (!trainerLimit.allowed) {
+        return NextResponse.json({ error: trainerLimit.error }, { status: 403 });
+      }
+
       const invite = await TrainerInviteModel.create({
         gymId,
         code,
@@ -523,6 +529,11 @@ export async function POST(request: Request) {
         { error: "name, specialty, and phone are required and must be within their length limits." },
         { status: 400 },
       );
+    }
+
+    const trainerLimit = await enforceGymPlanLimit(gymId, "trainers");
+    if (!trainerLimit.allowed) {
+      return NextResponse.json({ error: trainerLimit.error }, { status: 403 });
     }
 
     const inviteCode = await createUniqueTrainerCode();

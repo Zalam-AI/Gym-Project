@@ -3,8 +3,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Bell, Check, CheckCircle2, ChevronDown, LoaderCircle, Menu, X } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Sidebar, type NavigationPage } from "@/components/sidebar";
+import {
+  buildGymPath,
+  extractGymSlugFromPathname,
+  isNeutralBrowserHostname,
+} from "@/lib/gym-routing";
 import { LanguageSwitch, useLanguage } from "@/lib/i18n";
 import {
   clearStaffSessionToken,
@@ -49,6 +54,8 @@ function formatEgp(amount: number) {
 
 export function AppShell({ activePage, children }: AppShellProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const pathSlug = extractGymSlugFromPathname(pathname);
   const { lang, t } = useLanguage();
   const [menuOpen, setMenuOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -114,7 +121,8 @@ export function AppShell({ activePage, children }: AppShellProps) {
             if (response.status === 403) {
               await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
             }
-            router.replace("/login");
+            const currentPathSlug = extractGymSlugFromPathname(window.location.pathname);
+            router.replace(buildGymPath("/login", currentPathSlug));
             return null;
           }
           if (!response.ok) {
@@ -221,7 +229,14 @@ export function AppShell({ activePage, children }: AppShellProps) {
         throw new Error("Logout request failed.");
       }
       clearStaffSessionToken();
-      router.replace("/login");
+      const targetSlug =
+        pathSlug ||
+        (typeof window !== "undefined" &&
+        isNeutralBrowserHostname(window.location.hostname) &&
+        gymSlug
+          ? gymSlug
+          : null);
+      router.replace(buildGymPath("/login", targetSlug));
       router.refresh();
     } catch {
       setLogoutError("Unable to log out. Please try again.");
@@ -237,6 +252,13 @@ export function AppShell({ activePage, children }: AppShellProps) {
 
   const totalNotificationCount = pendingRequests.length + alerts.length;
   const latestPending = pendingRequests[0];
+  const effectiveSlug =
+    pathSlug ||
+    (typeof window !== "undefined" &&
+    isNeutralBrowserHostname(window.location.hostname) &&
+    gymSlug
+      ? gymSlug
+      : null);
 
   return (
     <div className="min-h-screen">
@@ -402,7 +424,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
                       {alerts.map((alert) => (
                         <li key={alert.id}>
                           <Link
-                            href={alert.href}
+                            href={buildGymPath(alert.href, effectiveSlug)}
                             onClick={() => setNotificationsOpen(false)}
                             className="block rounded-xl px-2.5 py-2.5 hover:bg-[#f7f9fa]"
                           >
@@ -475,7 +497,7 @@ export function AppShell({ activePage, children }: AppShellProps) {
                     )}
                   </div>
                   <Link
-                    href="/settings"
+                    href={buildGymPath("/settings", effectiveSlug)}
                     onClick={() => setAccountMenuOpen(false)}
                     className="mt-1 flex min-h-9 w-full items-center rounded-xl px-3 text-start text-[12px] font-medium text-[#354153] hover:bg-slate-50"
                   >

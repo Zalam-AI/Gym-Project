@@ -1,11 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, Building2, Globe, KeyRound } from "lucide-react";
+import {
+  buildGymPath,
+  extractGymSlugFromPathname,
+  isNeutralBrowserHostname,
+} from "@/lib/gym-routing";
 import { LanguageSwitch } from "@/lib/i18n";
-import { clearStaffSessionToken, setStaffSessionToken } from "@/lib/staff-client-auth";
+import {
+  clearStaffSessionToken,
+  ensureStaffFetchPatched,
+  setStaffSessionToken,
+} from "@/lib/staff-client-auth";
+
+ensureStaffFetchPatched();
 
 type AuthMode = "login" | "register";
 type RegistrationType = "create-gym" | "join-gym";
@@ -20,11 +31,12 @@ type TenantBrandingPayload =
   | {
       mode: "tenant";
       hostname: string;
-      resolvedBy: "subdomain" | "custom-domain";
+      resolvedBy: "subdomain" | "custom-domain" | "path";
       gym: {
         id: string;
         name: string;
         slug: string;
+        workspacePath?: string;
         subdomain: string;
         customDomain: string | null;
         address: string;
@@ -74,6 +86,8 @@ function safeNextPath(candidate: string | null): string {
 
 export function AuthPage({ mode }: { mode: AuthMode }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const pathSlug = extractGymSlugFromPathname(pathname);
   const isRegister = mode === "register";
   const [tenantState, setTenantState] = useState<TenantBrandingPayload | null>(null);
   const [registrationType, setRegistrationType] = useState<RegistrationType>("create-gym");
@@ -159,6 +173,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
         sessionToken?: string;
         pendingApproval?: boolean;
         message?: string;
+        gym?: { slug?: string };
       };
       if (!response.ok) {
         setError(payload.error ?? "Authentication failed.");
@@ -177,7 +192,15 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
       }
 
       const params = new URLSearchParams(window.location.search);
-      const destination = safeNextPath(params.get("next"));
+      const rawNext = safeNextPath(params.get("next"));
+      const resolvedSlug = payload.gym?.slug || pathSlug || tenantGym?.slug || null;
+      const isNeutral = isNeutralBrowserHostname(window.location.hostname);
+      const destination =
+        rawNext !== "/" && !rawNext.endsWith("/login") && !rawNext.endsWith("/register")
+          ? rawNext
+          : isNeutral && resolvedSlug
+            ? `/gym/${resolvedSlug}`
+            : "/";
       router.replace(destination);
       router.refresh();
     } catch {
@@ -295,7 +318,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
           <div className="ms-auto flex items-center gap-3">
             <LanguageSwitch />
             <Link
-              href={isRegister ? "/login" : "/register"}
+              href={buildGymPath(isRegister ? "/login" : "/register", pathSlug)}
               className="text-xs font-semibold hover:opacity-85"
               style={{ color: accentColor }}
             >
@@ -313,7 +336,11 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
             {tenantGym && (
               <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-[#dce6e1] bg-white px-3 py-1 text-[11px] font-semibold text-[#354153] shadow-2xs">
                 <Globe size={12} style={{ color: accentColor }} aria-hidden="true" />
-                <span>{tenantState?.hostname}</span>
+                <span>
+                  {tenantState?.mode === "tenant" && tenantState.resolvedBy === "path"
+                    ? `/gym/${tenantGym.slug}`
+                    : tenantState?.hostname}
+                </span>
               </div>
             )}
             <h2 className="text-[26px] font-semibold tracking-[-0.03em] text-[#172433]">
@@ -556,7 +583,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
                 ? "Have a staff invitation code?"
                 : "Launching a new gym or joining a team?"}{" "}
             <Link
-              href={isRegister ? "/login" : "/register"}
+              href={buildGymPath(isRegister ? "/login" : "/register", pathSlug)}
               className="font-semibold hover:opacity-85"
               style={{ color: tenantGym ? accentColor : "#258765" }}
             >

@@ -22,23 +22,131 @@ async function parseBody(request: Request) {
   }
 }
 
+const VALID_PLAN_DAYS = new Set(["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"]);
+
+function normalizeScheduledDays(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const d = item.trim();
+    if (VALID_PLAN_DAYS.has(d) && !out.includes(d)) out.push(d);
+  }
+  return out;
+}
+
+function parsePlanExercises(rawExercises: unknown): {
+  exercises?: Array<{
+    exerciseName: string;
+    sets: string;
+    reps: string;
+    restTime: string;
+    targetMuscleGroup: string;
+    day: string;
+    targetWeightKg: number;
+  }>;
+  error?: string;
+} {
+  if (!Array.isArray(rawExercises) || rawExercises.length < 1 || rawExercises.length > 40) {
+    return { error: "exercises must contain between 1 and 40 exercise entries." };
+  }
+  const exercises: Array<{
+    exerciseName: string;
+    sets: string;
+    reps: string;
+    restTime: string;
+    targetMuscleGroup: string;
+    day: string;
+    targetWeightKg: number;
+  }> = [];
+  for (const rawExercise of rawExercises) {
+    if (!rawExercise || typeof rawExercise !== "object" || Array.isArray(rawExercise)) {
+      return { error: "Each exercise must be an object." };
+    }
+    const exercise = rawExercise as Record<string, unknown>;
+    const rawDay = typeof exercise.day === "string" ? exercise.day.trim() : "";
+    const rawWeight =
+      typeof exercise.targetWeightKg === "number"
+        ? exercise.targetWeightKg
+        : typeof exercise.targetWeightKg === "string"
+          ? Number.parseFloat(exercise.targetWeightKg)
+          : 0;
+    const targetWeightKg = Number.isFinite(rawWeight)
+      ? Math.max(0, Math.min(1000, Math.round(rawWeight * 100) / 100))
+      : 0;
+    const values = {
+      exerciseName:
+        typeof exercise.exerciseName === "string" ? exercise.exerciseName.trim() : "",
+      sets: typeof exercise.sets === "string" ? exercise.sets.trim() : String(exercise.sets ?? "").trim(),
+      reps: typeof exercise.reps === "string" ? exercise.reps.trim() : String(exercise.reps ?? "").trim(),
+      restTime:
+        typeof exercise.restTime === "string" && exercise.restTime.trim()
+          ? exercise.restTime.trim()
+          : "60 sec",
+      targetMuscleGroup:
+        typeof exercise.targetMuscleGroup === "string" && exercise.targetMuscleGroup.trim()
+          ? exercise.targetMuscleGroup.trim()
+          : "Full body",
+      day: VALID_PLAN_DAYS.has(rawDay) ? rawDay : "",
+      targetWeightKg,
+    };
+    if (
+      !values.exerciseName ||
+      !values.sets ||
+      !values.reps ||
+      !values.restTime ||
+      !values.targetMuscleGroup ||
+      values.exerciseName.length > 80 ||
+      values.sets.length > 12 ||
+      values.reps.length > 16 ||
+      values.restTime.length > 16 ||
+      values.targetMuscleGroup.length > 40
+    ) {
+      return {
+        error:
+          "Each exercise needs a name, sets, reps, rest time, and target muscle group within the supported lengths.",
+      };
+    }
+    exercises.push(values);
+  }
+  return { exercises };
+}
+
 function serializePlan(plan: {
   _id: Types.ObjectId;
   title: string;
   targetGoal: string;
-  exercises: Array<{ exerciseName: string; sets: string; reps: string; restTime: string; targetMuscleGroup: string }>;
+  scheduledDays?: string[];
+  createdByRole?: "staff" | "trainer";
+  createdByTrainerId?: Types.ObjectId | null;
+  createdByName?: string;
+  exercises: Array<{
+    exerciseName: string;
+    sets: string;
+    reps: string;
+    restTime: string;
+    targetMuscleGroup: string;
+    day?: string;
+    targetWeightKg?: number;
+  }>;
   assignedMemberIds: unknown[];
 }) {
   return {
     id: plan._id.toString(),
     title: plan.title,
     targetGoal: plan.targetGoal,
+    scheduledDays: normalizeScheduledDays(plan.scheduledDays),
+    createdByRole: plan.createdByRole === "trainer" ? "trainer" : "staff",
+    createdByTrainerId: plan.createdByTrainerId ? String(plan.createdByTrainerId) : null,
+    createdByName: plan.createdByName ?? "",
     exercises: plan.exercises.map((exercise) => ({
       exerciseName: exercise.exerciseName,
       sets: exercise.sets,
       reps: exercise.reps,
       restTime: exercise.restTime,
       targetMuscleGroup: exercise.targetMuscleGroup,
+      day: exercise.day ?? "",
+      targetWeightKg: exercise.targetWeightKg ?? 0,
     })),
     assignedMemberIds: plan.assignedMemberIds.map((id) => String(id)),
   };
@@ -224,38 +332,142 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, upsertedCount });
     }
 
-    if (input.action !== "create") return NextResponse.json({ error: "action must be create, assign, or upsert-exercise-media." }, { status: 400 });
+    if (input.action === "duplicate") {
+      const workoutPlanId =
+        typeof input.workoutPlanId === "string" ? input.workoutPlanId.trim() : "";
+      if (!Types.ObjectId.isValid(workoutPlanId)) {
+        return NextResponse.json({ error: "Valid workoutPlanId is required." }, { status: 400 });
+      }
+      const source = await WorkoutPlanModel.findOne({ _id: workoutPlanId, gymId });
+      if (!source) {
+        return NextResponse.json(
+          { error: "Workout plan was not found for this gym." },
+          { status: 404 },
+        );
+      }
+      const customTitle =
+        typeof input.title === "string" && input.title.trim()
+          ? input.title.trim().slice(0, 80)
+          : `${source.title} (Copy)`.slice(0, 80);
+      const duplicated = await WorkoutPlanModel.create({
+        gymId,
+        title: customTitle,
+        targetGoal: source.targetGoal,
+        scheduledDays: normalizeScheduledDays(
+          (source as unknown as { scheduledDays?: string[] }).scheduledDays,
+        ),
+        createdByRole: "staff",
+        createdByTrainerId: null,
+        createdByName: userName || "Gym Staff",
+        exercises: (source.exercises as Array<Record<string, unknown>>).map((ex) => ({
+          exerciseName: String(ex.exerciseName ?? ""),
+          sets: String(ex.sets ?? "3"),
+          reps: String(ex.reps ?? "10"),
+          restTime: String(ex.restTime ?? "60 sec"),
+          targetMuscleGroup: String(ex.targetMuscleGroup ?? "Full body"),
+          day: typeof ex.day === "string" ? ex.day : "",
+          targetWeightKg: typeof ex.targetWeightKg === "number" ? ex.targetWeightKg : 0,
+        })),
+        assignedMemberIds: [],
+      });
+      return NextResponse.json(
+        { workoutPlan: serializePlan(duplicated as unknown as Parameters<typeof serializePlan>[0]) },
+        { status: 201 },
+      );
+    }
+
+    if (input.action === "delete") {
+      const workoutPlanId =
+        typeof input.workoutPlanId === "string" ? input.workoutPlanId.trim() : "";
+      if (!Types.ObjectId.isValid(workoutPlanId)) {
+        return NextResponse.json({ error: "Valid workoutPlanId is required." }, { status: 400 });
+      }
+      const deleted = await WorkoutPlanModel.findOneAndDelete({ _id: workoutPlanId, gymId });
+      if (!deleted) {
+        return NextResponse.json(
+          { error: "Workout plan was not found for this gym." },
+          { status: 404 },
+        );
+      }
+      await MemberModel.updateMany(
+        { gymId, pendingWorkoutPlanId: deleted._id },
+        {
+          $set: {
+            pendingWorkoutPlanId: null,
+            pendingWorkoutAssignedAt: null,
+            pendingWorkoutAssignedBy: "",
+          },
+        },
+      );
+      return NextResponse.json({ ok: true, deletedId: deleted._id.toString() });
+    }
+
+    if (input.action === "update") {
+      const workoutPlanId =
+        typeof input.workoutPlanId === "string" ? input.workoutPlanId.trim() : "";
+      if (!Types.ObjectId.isValid(workoutPlanId)) {
+        return NextResponse.json({ error: "Valid workoutPlanId is required." }, { status: 400 });
+      }
+      const existing = await WorkoutPlanModel.findOne({ _id: workoutPlanId, gymId });
+      if (!existing) {
+        return NextResponse.json(
+          { error: "Workout plan was not found for this gym." },
+          { status: 404 },
+        );
+      }
+      const title = typeof input.title === "string" ? input.title.trim() : "";
+      const targetGoal = typeof input.targetGoal === "string" ? input.targetGoal.trim() : "";
+      if (!title || !targetGoal || title.length > 80 || targetGoal.length > 80) {
+        return NextResponse.json(
+          { error: "title and targetGoal are required and must be 80 characters or fewer." },
+          { status: 400 },
+        );
+      }
+      const parsedEx = parsePlanExercises(input.exercises);
+      if (!parsedEx.exercises) {
+        return NextResponse.json({ error: parsedEx.error }, { status: 400 });
+      }
+      existing.title = title;
+      existing.targetGoal = targetGoal;
+      existing.set("scheduledDays", normalizeScheduledDays(input.scheduledDays));
+      existing.set("exercises", parsedEx.exercises);
+      await existing.save();
+      return NextResponse.json({
+        workoutPlan: serializePlan(existing as unknown as Parameters<typeof serializePlan>[0]),
+      });
+    }
+
+    if (input.action !== "create") {
+      return NextResponse.json(
+        { error: "action must be create, update, duplicate, delete, assign, or upsert-exercise-media." },
+        { status: 400 },
+      );
+    }
     const title = typeof input.title === "string" ? input.title.trim() : "";
     const targetGoal = typeof input.targetGoal === "string" ? input.targetGoal.trim() : "";
     if (!title || !targetGoal || title.length > 80 || targetGoal.length > 80) {
       return NextResponse.json({ error: "title and targetGoal are required and must be 80 characters or fewer." }, { status: 400 });
     }
-    if (!Array.isArray(input.exercises) || input.exercises.length < 1 || input.exercises.length > 40) {
-      return NextResponse.json({ error: "exercises must contain between 1 and 40 exercise entries." }, { status: 400 });
-    }
-    const exercises: Array<{ exerciseName: string; sets: string; reps: string; restTime: string; targetMuscleGroup: string }> = [];
-    for (const rawExercise of input.exercises) {
-      if (!rawExercise || typeof rawExercise !== "object" || Array.isArray(rawExercise)) {
-        return NextResponse.json({ error: "Each exercise must be an object." }, { status: 400 });
-      }
-      const exercise = rawExercise as Record<string, unknown>;
-      const values = {
-        exerciseName: typeof exercise.exerciseName === "string" ? exercise.exerciseName.trim() : "",
-        sets: typeof exercise.sets === "string" ? exercise.sets.trim() : "",
-        reps: typeof exercise.reps === "string" ? exercise.reps.trim() : "",
-        restTime: typeof exercise.restTime === "string" ? exercise.restTime.trim() : "",
-        targetMuscleGroup: typeof exercise.targetMuscleGroup === "string" ? exercise.targetMuscleGroup.trim() : "",
-      };
-      if (!values.exerciseName || !values.sets || !values.reps || !values.restTime || !values.targetMuscleGroup ||
-        values.exerciseName.length > 80 || values.sets.length > 12 || values.reps.length > 16 ||
-        values.restTime.length > 16 || values.targetMuscleGroup.length > 40) {
-        return NextResponse.json({ error: "Each exercise needs a name, sets, reps, rest time, and target muscle group within the supported lengths." }, { status: 400 });
-      }
-      exercises.push(values);
+    const parsedEx = parsePlanExercises(input.exercises);
+    if (!parsedEx.exercises) {
+      return NextResponse.json({ error: parsedEx.error }, { status: 400 });
     }
 
-    const plan = await WorkoutPlanModel.create({ gymId, title, targetGoal, exercises, assignedMemberIds: [] });
-    return NextResponse.json({ workoutPlan: serializePlan(plan) }, { status: 201 });
+    const plan = await WorkoutPlanModel.create({
+      gymId,
+      title,
+      targetGoal,
+      scheduledDays: normalizeScheduledDays(input.scheduledDays),
+      createdByRole: "staff",
+      createdByTrainerId: null,
+      createdByName: userName || "Gym Staff",
+      exercises: parsedEx.exercises,
+      assignedMemberIds: [],
+    });
+    return NextResponse.json(
+      { workoutPlan: serializePlan(plan as unknown as Parameters<typeof serializePlan>[0]) },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Failed to save workout plan:", error);
     return NextResponse.json({ error: "Unable to save workout plan at this time." }, { status: 503 });

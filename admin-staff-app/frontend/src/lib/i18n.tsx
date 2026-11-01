@@ -872,6 +872,68 @@ const EXACT_AR: Record<string, string> = {
   "Assign trainer & routine": "تعيين المدرب والبرنامج",
   "Send workout routine": "إرسال البرنامج التدريبي",
   "Pending member verification": "بانتظار تأكيد العضو",
+
+  // Staff Routine Management, Reorder & Egyptian Gym Arabic Exercises
+  "Edit workout plan": "تعديل البرنامج التدريبي",
+  "Build or refine a reusable workout routine with training days, exercise order, and suggested weights.":
+    "أنشئ أو عدّل برنامجاً تدريبياً قابلاً لإعادة الاستخدام مع تحديد أيام التمرين وترتيب التمارين والأوزان المقترحة.",
+  "Training days": "أيام التمرين",
+  "Quick-add from Exercise Library": "إضافة سريعة من مكتبة التمارين",
+  "Reorder with arrows and set sets, reps, suggested weight (kg), rest, and day.":
+    "رتّب التمارين بالأسهم وحدد المجموعات والتكرارات والوزن المقترح (كجم) والراحة واليوم.",
+  "All days": "كل الأيام",
+  "Move exercise up": "تحريك التمرين للأعلى",
+  "Move exercise down": "تحريك التمرين للأسفل",
+  "Suggested weight kg": "الوزن المقترح (كجم)",
+  Duplicate: "نسخ",
+  Delete: "حذف",
+  "Coach Routine": "برنامج مدرب",
+  "Unable to duplicate workout plan.": "تعذر نسخ البرنامج التدريبي.",
+  "Unable to delete workout plan.": "تعذر حذف البرنامج التدريبي.",
+
+  // Egyptian Gym Arabic Exercise Library (27 canonical exercises + aliases)
+  "Barbell Bench Press": "ضغط الصدر بالبار",
+  "Bench Press": "ضغط الصدر بالبار",
+  "Incline Dumbbell Press": "ضغط صدر علوي بالدمبل",
+  "Cable Chest Fly": "تفتيح الصدر بالكيبل",
+  "Dumbbell Chest Fly": "تفتيح الصدر بالدمبل",
+  "Push-Ups": "تمرين الضغط",
+  "Push-Up": "تمرين الضغط",
+  "Barbell Back Squat": "القرفصاء بالبار",
+  Squat: "القرفصاء",
+  "Goblet Squat": "قرفصاء بالدمبل أمام الصدر",
+  "Leg Press": "دفع الأرجل على الجهاز",
+  Deadlift: "الرفعة الميتة بالبار",
+  "Romanian Deadlift": "الرفعة الرومانية للخلفيات",
+  "Lat Pulldown": "سحب أمامي للظهر",
+  "Pull-Ups": "تمرين العقلة",
+  "Pull-Up": "تمرين العقلة",
+  "Overhead Barbell Press": "ضغط الأكتاف بالبار",
+  "Seated Dumbbell Shoulder Press": "ضغط الأكتاف بالدمبل جالساً",
+  "Dumbbell Lateral Raise": "رفرفة جانبي للأكتاف بالدمبل",
+  "Barbell Bicep Curl": "ثني الذراع للبايسبس بالبار",
+  "Biceps Curl": "ثني الذراع للبايسبس",
+  "Hammer Curl": "همر كيرل للبايسبس بالدمبل",
+  "Seated Cable Row": "سحب أرضي للظهر بالكيبل",
+  "Bent-Over Barbell Row": "تجديف الظهر بالبار من الانحناء",
+  "Tricep Rope Pushdown": "دفع الحبل للترايسبس على الكيبل",
+  "Walking Lunges": "طعن مشي للأرجل",
+  "Barbell Hip Thrust": "دفع الحوض بالبار للأرداف",
+  "Seated Leg Curl": "ثني الأرجل الخلفي على الجهاز",
+  "Standing Calf Raise": "رفع السمانة واقفاً",
+  "Face Pull": "سحب الحبل للوجه والأكتاف الخلفية",
+  "Overhead Tricep Extension": "مد الذراع للترايسبس خلف الرأس",
+  Plank: "تمرين البلانك للبطن",
+  "Hanging Leg Raise": "رفع الأرجل معلقاً للبطن",
+
+  // Leeloo Connect Super Admin Additions
+  "Leeloo Connect — Super Admin": "Leeloo Connect — الإدارة العليا للمنصة",
+  "Multi-gym SaaS control plane · Individual clubs operate under":
+    "وحدة إدارة الأندية متعددة الفروع · تعمل بوابات الأندية تحت المسار",
+  "Subscriptions & Payments": "الاشتراكات والمدفوعات",
+  "Platform Config": "إعدادات المنصة",
+  "Audit & Activity": "التدقيق والنشاط",
+  "View Details": "عرض التفاصيل",
 };
 
 const EN_MONTHS: Record<string, string> = {
@@ -1108,6 +1170,16 @@ const AR_PATTERNS: Array<[RegExp, (...args: string[]) => string]> = [
   [
     /^Pending member verification\s*\((.+)\)$/i,
     (_, title) => `بانتظار تأكيد العضو (${title})`,
+  ],
+  [/^Exercise\s+(\d+)$/i, (_, n) => `التمرين ${n}`],
+  [/^Coach\s*[·•]\s*(.+)$/i, (_, name) => `المدرب · ${name}`],
+  [/^Delete\s+(.+)$/i, (_, title) => `حذف ${title}`],
+  [/^Gyms\s*\((\d+)\)$/i, (_, n) => `الأندية (${n})`],
+  [/^Plans & Pricing\s*\((\d+)\)$/i, (_, n) => `الباقات والتسعير (${n})`],
+  [
+    /^(?:([A-Za-z]+)\s*·\s*)?(\d+)\s+sets?\s*·\s*([0-9–-]+)\s+reps?(?:\s*·\s*([\d.]+)\s*kg)?\s*·\s*(.+)\s+rest$/i,
+    (_, day, s, r, w, rest) =>
+      `${day ? `${EN_WEEKDAYS[day] ?? day} · ` : ""}${s} مجموعات · ${r} تكرار${w ? ` · ${w} كجم` : ""} · راحة ${rest}`,
   ],
   [/^(.+)\s+·\s+(.+)$/, (_, a, b) => (a in EXACT_AR || b in EXACT_AR ? `${EXACT_AR[a] ?? a} · ${EXACT_AR[b] ?? b}` : `${a} · ${b}`)],
   [/^requested$/i, () => "طلب اشتراك"],
