@@ -541,7 +541,7 @@ export function SuperAdminSubscriptionsTab({
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[920px] text-left text-xs">
+          <table className="w-full min-w-[920px] text-start text-xs">
             <thead className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               <tr>
                 <th className="px-3.5 py-3">Gym</th>
@@ -549,7 +549,7 @@ export function SuperAdminSubscriptionsTab({
                 <th className="px-3.5 py-3">Payment / Lifecycle</th>
                 <th className="px-3.5 py-3">Start → Expiration</th>
                 <th className="px-3.5 py-3">Grace Period</th>
-                <th className="px-3.5 py-3 text-right">Actions</th>
+                <th className="px-3.5 py-3 text-end">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -569,7 +569,7 @@ export function SuperAdminSubscriptionsTab({
                         <button
                           type="button"
                           onClick={() => onOpenGymDetails(g.id)}
-                          className="text-left font-semibold text-slate-900 hover:text-indigo-600"
+                          className="text-start font-semibold text-slate-900 hover:text-indigo-600"
                         >
                           {g.name}
                         </button>
@@ -627,7 +627,7 @@ export function SuperAdminSubscriptionsTab({
                       <td className="px-3.5 py-3 text-[11px] text-slate-600">
                         {sub.gracePeriodDays ?? 7} days
                       </td>
-                      <td className="px-3.5 py-3 text-right">
+                      <td className="px-3.5 py-3 text-end">
                         {canWrite ? (
                           <div className="inline-flex flex-wrap justify-end gap-1.5">
                             <button
@@ -703,7 +703,7 @@ export function SuperAdminSubscriptionsTab({
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left text-xs">
+            <table className="w-full min-w-[820px] text-start text-xs">
               <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                 <tr>
                   <th className="px-3 py-2.5">Receipt</th>

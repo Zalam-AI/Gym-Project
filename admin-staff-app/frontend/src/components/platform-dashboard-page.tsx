@@ -1608,7 +1608,7 @@ export function PlatformDashboardPage() {
             {/* Gyms Table */}
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[980px] text-left text-xs">
+                <table className="w-full min-w-[980px] text-start text-xs">
                   <thead className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                     <tr>
                       <th className="px-4 py-3.5">Gym &amp; Domains</th>
@@ -1616,7 +1616,7 @@ export function PlatformDashboardPage() {
                       <th className="px-4 py-3.5">Status</th>
                       <th className="px-4 py-3.5">SaaS Subscription (Manual)</th>
                       <th className="px-4 py-3.5">Usage</th>
-                      <th className="px-4 py-3.5 text-right">Actions</th>
+                      <th className="px-4 py-3.5 text-end">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1633,7 +1633,7 @@ export function PlatformDashboardPage() {
                             <button
                               type="button"
                               onClick={() => setDetailGymId(gym.id)}
-                              className="text-left font-semibold text-slate-900 hover:text-indigo-600"
+                              className="text-start font-semibold text-slate-900 hover:text-indigo-600"
                             >
                               {gym.name}
                             </button>
@@ -1725,7 +1725,7 @@ export function PlatformDashboardPage() {
                             </p>
                           </td>
 
-                          <td className="px-4 py-3.5 text-right">
+                          <td className="px-4 py-3.5 text-end">
                             <div className="inline-flex flex-wrap justify-end gap-1.5">
                               <button
                                 type="button"

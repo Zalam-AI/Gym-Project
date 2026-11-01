@@ -11,21 +11,18 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
   Check,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   CloudOff,
   Flame,
   History,
   LoaderCircle,
-  Minus,
   Pause,
   Play,
   Plus,
   Search,
-  SlidersHorizontal,
   Sparkles,
   Timer,
   Trophy,
@@ -33,7 +30,16 @@ import {
   X,
 } from "lucide-react";
 import { ExerciseDemoVisual } from "@/components/exercise-demo-visual";
-import type { ExerciseMediaCatalogEntry } from "@/lib/exercise-media";
+import {
+  REPS_WHEEL_VALUES,
+  SETS_WHEEL_VALUES,
+  WEIGHT_KG_WHEEL_VALUES,
+  WheelNumberPicker,
+} from "@/components/wheel-number-picker";
+import {
+  matchesExerciseQuery,
+  type ExerciseMediaCatalogEntry,
+} from "@/lib/exercise-media";
 import { mobileFetch, readMobileJson } from "@/lib/mobile-fetch";
 import {
   DEFAULT_PROGRESSION_RULE_SETTINGS,
@@ -151,18 +157,6 @@ function deduplicateExerciseSets(sets: ActiveWorkoutSet[]): ActiveWorkoutSet[] {
   return Array.from(map.values())
     .sort((a, b) => a.setNumber - b.setNumber)
     .map((s, idx) => ({ ...s, setNumber: idx + 1 }));
-}
-
-function stepWeightString(raw: string, delta: number): string {
-  const cur = Number.parseFloat(raw) || 0;
-  const next = Math.max(0, Math.min(1000, Math.round((cur + delta) * 10) / 10));
-  return String(next);
-}
-
-function stepRepsString(raw: string, delta: number): string {
-  const cur = Number.parseInt(raw, 10) || 0;
-  const next = Math.max(1, Math.min(500, cur + delta));
-  return String(next);
 }
 
 /**
@@ -341,6 +335,7 @@ export function ActiveWorkoutPlayer({
   onRespondPriorProgression,
   onFinishWorkout,
   onDiscardSession,
+  onMinimizeWorkout,
 }: {
   session: ActiveWorkoutSession;
   exerciseDefaults: Record<string, PreviousExerciseStat>;
@@ -368,6 +363,7 @@ export function ActiveWorkoutPlayer({
     saveRoutineTitle?: string;
   }) => Promise<void>;
   onDiscardSession: () => void;
+  onMinimizeWorkout?: () => void;
 }) {
   const { settings: restSettings } = useRestTimerSettings();
 
@@ -383,7 +379,19 @@ export function ActiveWorkoutPlayer({
   );
   const [restCompleteNotice, setRestCompleteNotice] = useState(false);
   const [isRestSettingsOpen, setIsRestSettingsOpen] = useState(false);
-  const [showDemo, setShowDemo] = useState(true);
+  const [exercisePhase, setExercisePhase] = useState<"setup" | "demo" | "track">(
+    () => {
+      const firstEx = session.exercises[session.currentExerciseIndex ?? 0];
+      if (firstEx && firstEx.sets.some((s) => s.completed)) return "track";
+      return "setup";
+    },
+  );
+  const configuredExercisesRef = useRef<Set<number>>(new Set());
+  const stageSwipeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
   const [autoAdvanceBanner, setAutoAdvanceBanner] = useState<string>("");
   const [isAddExerciseOpen, setIsAddExerciseOpen] = useState(
     () => session.exercises.length === 0,
@@ -706,6 +714,19 @@ export function ActiveWorkoutPlayer({
     setIsAdjustingPriorRec(false);
   }, [safeExIndex, currentExercise?.name, currentExercise?.feedback?.reportedDiscomfort]);
 
+  // Reset focused step phase when switching exercises: Setup -> Demo -> Track
+  useEffect(() => {
+    const ex = session.exercises[safeExIndex];
+    if (!ex) return;
+    if (ex.sets.some((s) => s.completed) || configuredExercisesRef.current.has(safeExIndex)) {
+      setExercisePhase("track");
+    } else {
+      setExercisePhase("setup");
+    }
+    // Only run when active exercise index or exercise count changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeExIndex, session.exercises.length]);
+
   const currentSetIndex = useMemo(() => {
     if (!currentExercise) return -1;
     return currentExercise.sets.findIndex((s) => !s.completed);
@@ -744,7 +765,7 @@ export function ActiveWorkoutPlayer({
   }, [session.exercises]);
 
   const filteredAddCatalog = useMemo(() => {
-    const q = addSearch.trim().toLowerCase();
+    const q = addSearch.trim();
     const muscleLower = addMuscleFilter.toLowerCase();
     const filtered = exerciseCatalog.filter((item) => {
       if (
@@ -754,9 +775,7 @@ export function ActiveWorkoutPlayer({
         return false;
       }
       if (!q) return true;
-      return (
-        item.name.toLowerCase().includes(q) || item.muscle.toLowerCase().includes(q)
-      );
+      return matchesExerciseQuery(item, q);
     });
     return q ? filtered : filtered.slice(0, 28);
   }, [addMuscleFilter, addSearch, exerciseCatalog]);
@@ -767,6 +786,131 @@ export function ActiveWorkoutPlayer({
     !exerciseCatalog.some(
       (item) => item.name.toLowerCase() === trimmedCustomExerciseName.toLowerCase(),
     );
+
+  function applyExerciseSetupConfig(patch: {
+    weightKg?: number;
+    reps?: number;
+    setsCount?: number;
+  }) {
+    onChangeSession((prev) => {
+      const targetEx = prev.exercises[safeExIndex];
+      if (!targetEx) return prev;
+      const completedCount = targetEx.sets.filter((s) => s.completed).length;
+      const desiredTotal =
+        patch.setsCount !== undefined
+          ? Math.max(Math.max(1, completedCount), Math.min(20, Math.round(patch.setsCount)))
+          : targetEx.sets.length;
+      const firstOpen = targetEx.sets.find((s) => !s.completed) ?? targetEx.sets[0];
+      const nextWeightStr =
+        patch.weightKg !== undefined
+          ? String(Math.max(0, Math.round(patch.weightKg * 100) / 100))
+          : firstOpen?.weightKg ?? "0";
+      const nextRepsStr =
+        patch.reps !== undefined
+          ? String(Math.max(1, Math.round(patch.reps)))
+          : firstOpen?.reps ?? "10";
+
+      const rebuiltSets: ActiveWorkoutSet[] = [];
+      for (let i = 0; i < desiredTotal; i += 1) {
+        const existingSet = targetEx.sets[i];
+        if (existingSet && existingSet.completed) {
+          rebuiltSets.push({ ...existingSet, setNumber: i + 1 });
+        } else {
+          rebuiltSets.push({
+            setNumber: i + 1,
+            weightKg:
+              patch.weightKg !== undefined
+                ? nextWeightStr
+                : existingSet?.weightKg ?? nextWeightStr,
+            reps:
+              patch.reps !== undefined
+                ? nextRepsStr
+                : existingSet?.reps ?? nextRepsStr,
+            completed: false,
+            completedAtIso: null,
+          });
+        }
+      }
+
+      return {
+        ...prev,
+        exercises: prev.exercises.map((ex, idx) =>
+          idx === safeExIndex
+            ? {
+                ...ex,
+                targetRepsLabel:
+                  patch.reps !== undefined ? nextRepsStr : ex.targetRepsLabel,
+                sets: deduplicateExerciseSets(rebuiltSets),
+              }
+            : ex,
+        ),
+        clientUpdatedAtMs: Date.now(),
+      };
+    });
+  }
+
+  function advanceFocusedStep() {
+    if (!currentExercise) return;
+    if (currentSet === null) {
+      if (nextIncompleteExerciseIdx >= 0) {
+        selectExerciseIndex(nextIncompleteExerciseIdx);
+      } else if (sessionTotals.completedSets > 0) {
+        setPlayerError("");
+        setIsFinishModalOpen(true);
+      }
+      return;
+    }
+    if (exercisePhase === "setup") {
+      configuredExercisesRef.current.add(safeExIndex);
+      setExercisePhase("demo");
+    } else if (exercisePhase === "demo") {
+      configuredExercisesRef.current.add(safeExIndex);
+      setExercisePhase("track");
+    }
+  }
+
+  function stepBackFocusedStep() {
+    if (!currentExercise) return;
+    if (exercisePhase === "track" && currentSet !== null) {
+      setExercisePhase("demo");
+    } else if (exercisePhase === "demo") {
+      setExercisePhase("setup");
+    }
+  }
+
+  function handleStagePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest(
+        '[role="listbox"], input, textarea, select, [aria-label^="Swipe to complete"]',
+      )
+    ) {
+      stageSwipeRef.current = null;
+      return;
+    }
+    stageSwipeRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+    };
+  }
+
+  function handleStagePointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = stageSwipeRef.current;
+    stageSwipeRef.current = null;
+    if (!start || start.pointerId !== e.pointerId) return;
+    const rawDx = e.clientX - start.startX;
+    const dy = e.clientY - start.startY;
+    if (Math.abs(rawDx) < 56 || Math.abs(rawDx) < Math.abs(dy) * 1.4) return;
+    const isRtl =
+      typeof document !== "undefined" && document.documentElement.dir === "rtl";
+    const forwardSwipe = isRtl ? rawDx > 56 : rawDx < -56;
+    if (forwardSwipe) {
+      advanceFocusedStep();
+    } else {
+      stepBackFocusedStep();
+    }
+  }
 
   function selectExerciseIndex(idx: number) {
     if (autoAdvanceTimeoutRef.current) {
@@ -1384,1069 +1528,1083 @@ export function ActiveWorkoutPlayer({
     }
   }
 
+  const setupTargetSet =
+    currentExercise?.sets.find((s) => !s.completed) ??
+    currentExercise?.sets[0] ??
+    null;
+  const setupWeightKgVal = Math.max(
+    0,
+    Number.parseFloat(setupTargetSet?.weightKg ?? "0") || 0,
+  );
+  const setupRepsVal = Math.max(
+    1,
+    Number.parseInt(setupTargetSet?.reps ?? "10", 10) || 10,
+  );
+  const setupSetsCountVal = Math.max(1, currentExercise?.sets.length ?? 3);
+
   return (
-    <section aria-label="Active workout session" className="space-y-3 pb-4">
-      {/* Compact Session Status Bar (Secondary metadata kept lightweight) */}
-      <div className={`${ui.card} px-3.5 py-3`}>
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-accent-text">
-                <Flame size={11} aria-hidden="true" />
-                {session.dayLabel || "Live Session"}
-              </span>
-              <span
-                className="inline-flex items-center gap-1 rounded-full border border-line bg-subtle px-1.5 py-0.5 text-[8px] font-medium text-ink-muted"
-                title={
-                  isOnline
-                    ? "Session automatically saved"
-                    : "Offline — sets saved on device and will sync automatically"
-                }
-              >
-                {isOnline ? (
-                  <>
-                    <Wifi size={9} className="text-accent-text" aria-hidden="true" />
-                    {isSyncingDraft ? "Syncing" : "Saved"}
-                  </>
-                ) : (
-                  <>
-                    <CloudOff size={9} className="text-warning-text" aria-hidden="true" />
-                    Offline · Saved
-                  </>
-                )}
-              </span>
-            </div>
-            <p className="mt-0.5 truncate text-[12px] font-semibold text-ink">
-              {session.routineTitle}
-            </p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-1.5">
-            <button
-              type="button"
-              onClick={togglePause}
-              aria-label={session.isPaused ? "Resume timer" : "Pause timer"}
-              className={`${ui.btnSecondary} min-h-8 rounded-lg px-2.5 text-[11px]`}
-            >
-              {session.isPaused ? (
-                <Play size={12} aria-hidden="true" />
-              ) : (
-                <Pause size={12} aria-hidden="true" />
-              )}
-              <span data-no-translate="true" className="font-mono">
-                {formatClock(elapsedSeconds)}
-              </span>
-            </button>
-            <button
-              type="button"
-              disabled={sessionTotals.completedSets < 1}
-              onClick={() => {
-                setPlayerError("");
-                setIsFinishModalOpen(true);
-              }}
-              className={`${ui.btnPrimary} min-h-8 rounded-lg px-2.5 text-[11px]`}
-            >
-              Finish
-            </button>
-          </div>
-        </div>
-
-        {/* Slim Progress Bar + Ordered Exercise Switcher Pills */}
-        <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-subtle">
-          <div
-            className="h-full rounded-full bg-accent transition-[width]"
-            style={{ width: `${sessionTotals.percent}%` }}
-          />
-        </div>
-
-        <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
-          {session.exercises.map((ex, idx) => {
-            const doneCount = ex.sets.filter((s) => s.completed).length;
-            const isAllDone = ex.sets.length > 0 && doneCount === ex.sets.length;
-            const isActive = idx === safeExIndex;
-            return (
-              <button
-                key={`${ex.name}-${idx}`}
-                type="button"
-                onClick={() => selectExerciseIndex(idx)}
-                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
-                  isActive
-                    ? "border-accent bg-accent text-on-accent"
-                    : isAllDone
-                      ? "border-accent-border bg-accent-soft text-accent-text"
-                      : "border-line bg-subtle text-ink-secondary hover:text-ink"
-                }`}
-              >
-                <span data-no-translate="true">{idx + 1}.</span>
-                <span className="max-w-[105px] truncate">{ex.name}</span>
-                {isAllDone && <Check size={11} strokeWidth={2.6} aria-hidden="true" />}
-              </button>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => setIsAddExerciseOpen(true)}
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-line-strong bg-surface px-2.5 py-1 text-[10px] font-semibold text-ink-secondary hover:text-accent-text"
-          >
-            <Plus size={11} aria-hidden="true" />
-            Exercise
-          </button>
-        </div>
-      </div>
-
-      {/* Prominent Automatic Rest Timer Card (Pause, Resume, Skip, Add Time & Final 5s Alert) */}
-      {(restSnapshot.status === "running" || restSnapshot.status === "paused") && (
-        <div
-          role="region"
-          aria-label="Active rest timer"
-          className={`space-y-2.5 rounded-2xl border p-3.5 transition-colors ${
-            restSnapshot.status === "paused"
-              ? "border-warning-border bg-warning-soft"
-              : restSnapshot.isFinalFive
-                ? "border-accent bg-accent-soft"
-                : "border-accent-border bg-accent-soft"
-          }`}
-        >
+    <section
+      aria-label="Active workout session"
+      className="fixed inset-0 z-50 flex flex-col bg-canvas text-ink"
+    >
+      <div className="mx-auto flex h-full w-full max-w-[460px] flex-col overflow-hidden">
+        {/* Minimal Full-Screen Focused Workout Top Bar */}
+        <header className="shrink-0 border-b border-divider bg-surface px-4 py-3">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <span
-                className={`grid size-10 shrink-0 place-items-center rounded-xl ${
-                  restSnapshot.status === "paused"
-                    ? "border border-warning-border bg-surface text-warning-text"
-                    : "bg-accent text-on-accent"
-                }`}
+            <button
+              type="button"
+              onClick={() => setIsDiscardConfirmOpen(true)}
+              aria-label="Exit workout mode"
+              className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-xl border border-line-strong bg-subtle px-2.5 text-[11px] font-semibold text-ink-secondary hover:text-ink"
+            >
+              <X size={14} aria-hidden="true" />
+              <span>Exit</span>
+            </button>
+
+            <div className="min-w-0 flex-1 text-center">
+              <div className="flex items-center justify-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-accent-text">
+                  <Flame size={10} aria-hidden="true" />
+                  {session.dayLabel || "Focused Workout"}
+                </span>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-line bg-subtle px-1.5 py-0.5 text-[8px] font-medium text-ink-muted"
+                  title={
+                    isOnline
+                      ? "Session automatically saved"
+                      : "Offline — sets saved on device and will sync automatically"
+                  }
+                >
+                  {isOnline ? (
+                    <>
+                      <Wifi size={8} className="text-accent-text" aria-hidden="true" />
+                      {isSyncingDraft ? "Syncing" : "Saved"}
+                    </>
+                  ) : (
+                    <>
+                      <CloudOff size={8} className="text-warning-text" aria-hidden="true" />
+                      Offline · Saved
+                    </>
+                  )}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-[12px] font-semibold text-ink">
+                {session.routineTitle}
+              </p>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={togglePause}
+                aria-label={session.isPaused ? "Resume timer" : "Pause timer"}
+                className={`${ui.btnSecondary} min-h-9 rounded-xl px-2 text-[10px]`}
               >
-                <Timer size={19} aria-hidden="true" />
-              </span>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="text-[9px] font-semibold uppercase tracking-wider text-accent-text">
-                    Rest Timer
-                  </p>
-                  {restSnapshot.status === "paused" ? (
-                    <span className={ui.badgeWarning}>Paused</span>
-                  ) : restSnapshot.isFinalFive ? (
-                    <span className={ui.badgeAccent}>Get Ready</span>
-                  ) : null}
-                </div>
-                <p
-                  data-no-translate="true"
-                  aria-live="off"
-                  className={`font-mono text-[24px] font-bold leading-none tracking-tight ${
-                    restSnapshot.isFinalFive && restSnapshot.status === "running"
-                      ? "text-accent-text"
-                      : "text-ink"
+                {session.isPaused ? (
+                  <Play size={11} aria-hidden="true" />
+                ) : (
+                  <Pause size={11} aria-hidden="true" />
+                )}
+                <span data-no-translate="true" className="font-mono">
+                  {formatClock(elapsedSeconds)}
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={sessionTotals.completedSets < 1}
+                onClick={() => {
+                  setPlayerError("");
+                  setIsFinishModalOpen(true);
+                }}
+                className={`${ui.btnPrimary} min-h-9 rounded-xl px-3 text-[11px]`}
+              >
+                Finish
+              </button>
+            </div>
+          </div>
+
+          {/* Slim Progress Bar + Ordered Exercise Switcher Pills */}
+          <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-subtle">
+            <div
+              className="h-full rounded-full bg-accent transition-[width]"
+              style={{ width: `${sessionTotals.percent}%` }}
+            />
+          </div>
+
+          <div className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {session.exercises.map((ex, idx) => {
+              const doneCount = ex.sets.filter((s) => s.completed).length;
+              const isAllDone = ex.sets.length > 0 && doneCount === ex.sets.length;
+              const isActive = idx === safeExIndex;
+              return (
+                <button
+                  key={`${ex.name}-${idx}`}
+                  type="button"
+                  onClick={() => selectExerciseIndex(idx)}
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                    isActive
+                      ? "border-accent bg-accent text-on-accent"
+                      : isAllDone
+                        ? "border-accent-border bg-accent-soft text-accent-text"
+                        : "border-line bg-subtle text-ink-secondary hover:text-ink"
                   }`}
                 >
-                  {formatClock(restSnapshot.remainingSeconds)}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                aria-label={
-                  restSnapshot.status === "paused"
-                    ? "Resume rest timer"
-                    : "Pause rest timer"
-                }
-                onClick={togglePauseRestTimer}
-                className={`${ui.btnSecondary} min-h-9 rounded-xl px-2.5 text-[10px]`}
-              >
-                {restSnapshot.status === "paused" ? (
-                  <Play size={13} aria-hidden="true" />
-                ) : (
-                  <Pause size={13} aria-hidden="true" />
-                )}
-                {restSnapshot.status === "paused" ? "Resume" : "Pause"}
-              </button>
-              <button
-                type="button"
-                aria-label="Skip rest timer"
-                onClick={clearRestTimer}
-                className={`${ui.btnPrimary} min-h-9 rounded-xl px-3 text-[10px]`}
-              >
-                Skip
-              </button>
-            </div>
-          </div>
-
-          {/* Remaining Progress Bar */}
-          <div className="h-1.5 overflow-hidden rounded-full bg-surface">
-            <div
-              className={`h-full rounded-full transition-[width] duration-150 ${
-                restSnapshot.status === "paused" ? "bg-warning-text" : "bg-accent"
-              }`}
-              style={{ width: `${Math.round(restSnapshot.progressRatio * 100)}%` }}
-            />
-          </div>
-
-          {/* Quick Add / Adjust Rest Time Controls + Settings */}
-          <div className="flex items-center justify-between gap-1.5">
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                type="button"
-                aria-label="Reduce rest by 15 seconds"
-                onClick={() => adjustRestTimer(-15)}
-                className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
-              >
-                <span data-no-translate="true">-15s</span>
-              </button>
-              <button
-                type="button"
-                aria-label="Add 15 seconds to rest"
-                onClick={() => adjustRestTimer(15)}
-                className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
-              >
-                <span data-no-translate="true">+15s</span>
-              </button>
-              <button
-                type="button"
-                aria-label="Add 30 seconds to rest"
-                onClick={() => adjustRestTimer(30)}
-                className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
-              >
-                <span data-no-translate="true">+30s</span>
-              </button>
-              <button
-                type="button"
-                aria-label="Add 60 seconds to rest"
-                onClick={() => adjustRestTimer(60)}
-                className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
-              >
-                <span data-no-translate="true">+60s</span>
-              </button>
-            </div>
-            <button
-              type="button"
-              aria-label="Open rest timer settings"
-              onClick={() => setIsRestSettingsOpen(true)}
-              className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-lg border border-line bg-surface px-2 text-[10px] font-semibold text-ink-secondary hover:text-ink"
-            >
-              <SlidersHorizontal size={12} aria-hidden="true" />
-              Settings
-            </button>
-          </div>
-        </div>
-      )}
-
-      {restCompleteNotice &&
-        restSnapshot.status === "idle" && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3.5 py-2 text-[11px] font-semibold text-accent-text"
-          >
-            <span>Rest complete · Ready for your next set</span>
-            <button
-              type="button"
-              onClick={() => setRestCompleteNotice(false)}
-              className="text-[10px] text-ink-secondary hover:text-ink"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
-      {autoAdvanceBanner && (
-        <div
-          role="status"
-          className="flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3.5 py-2 text-[11px] font-semibold text-accent-text"
-        >
-          <span className="truncate">{autoAdvanceBanner}</span>
-          {sessionTotals.completedSets === sessionTotals.totalSets &&
-            sessionTotals.totalSets > 0 && (
-              <button
-                type="button"
-                onClick={() => setIsFinishModalOpen(true)}
-                className="shrink-0 underline"
-              >
-                Finish Now
-              </button>
-            )}
-        </div>
-      )}
-
-      {playerError && (
-        <p
-          role="alert"
-          className="rounded-xl border border-danger-border bg-danger-soft px-3 py-2 text-[11px] text-danger-text"
-        >
-          {playerError}
-        </p>
-      )}
-
-      {/* DEDICATED FOCUSED EXERCISE INTERFACE */}
-      {currentExercise ? (
-        <div className={`${ui.cardElevated} space-y-3.5 p-4`}>
-          {/* 1. Exercise Name + Muscle + Demo Toggle */}
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className={ui.badgeNeutral}>{currentExercise.muscle}</span>
-                <span className="text-[10px] font-medium text-ink-muted">
-                  {`Exercise ${safeExIndex + 1} of ${session.exercises.length}`}
-                </span>
-              </div>
-              <h2 className="mt-1.5 text-[20px] font-bold uppercase tracking-[-0.03em] text-ink">
-                {currentExercise.name}
-              </h2>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowDemo((v) => !v)}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-line bg-subtle px-2 py-1 text-[9px] font-semibold text-ink-secondary hover:text-ink"
-            >
-              {showDemo ? "Hide demo" : "Demo"}
-              {showDemo ? (
-                <ChevronUp size={11} aria-hidden="true" />
-              ) : (
-                <ChevronDown size={11} aria-hidden="true" />
-              )}
-            </button>
-          </div>
-
-          {/* 2. Exercise Demonstration */}
-          {showDemo && (
-            <ExerciseDemoVisual
-              exerciseName={currentExercise.name}
-              muscle={currentExercise.muscle}
-              mediaCatalog={exerciseMediaCatalog}
-            />
-          )}
-
-          {/* 3. Previous Performance Memory + Exercise History + Prior Pending Suggestion */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-line bg-subtle px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-[9px] font-semibold uppercase tracking-wider text-ink-muted">
-                  Previous performance
-                </p>
-                <p className="mt-0.5 text-[12px] font-semibold text-ink">
-                  {currentPrevious &&
-                  ((currentPrevious.lastPerformedWeightKg ?? currentPrevious.lastWeightKg) > 0 ||
-                    (currentPrevious.lastPerformedReps ?? currentPrevious.lastReps) > 0) ? (
-                    <span data-no-translate="true">
-                      {currentPrevious.lastPerformedWeightKg ?? currentPrevious.lastWeightKg} kg ×{" "}
-                      {currentPrevious.lastPerformedReps ?? currentPrevious.lastReps} reps
-                    </span>
-                  ) : (
-                    <span className="text-ink-secondary">
-                      First session · Smart defaults ready
-                    </span>
-                  )}
-                </p>
-                {typeof currentPrevious?.lastDifficultyRating === "number" && (
-                  <p className="mt-0.5 text-[10px] text-ink-secondary">
-                    {`Last effort: ${currentPrevious.lastDifficultyRating}/10 (${describeDifficultyRating(currentPrevious.lastDifficultyRating)})`}
-                  </p>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                {currentPrevious && currentPrevious.bestWeightKg > 0 && (
-                  <span className={ui.badgeAccent}>
-                    {`PR ${currentPrevious.bestWeightKg} kg × ${currentPrevious.bestRepsAtMaxWeight}`}
-                  </span>
-                )}
-                {currentExerciseHistory && currentExerciseHistory.totalSessions > 0 && (
-                  <button
-                    type="button"
-                    aria-label="Open exercise history"
-                    onClick={() => setIsExerciseHistoryOpen(true)}
-                    className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-line-strong bg-surface px-2 text-[10px] font-semibold text-ink-secondary hover:text-ink"
-                  >
-                    <History size={12} aria-hidden="true" />
-                    History
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {currentPrevious?.activeProgression &&
-              currentPrevious.activeProgression.decision === "pending" &&
-              currentSet !== null &&
-              !dismissedPriorRecKeys.includes(currentExercise.name.trim().toLowerCase()) && (
-                <div
-                  role="region"
-                  aria-label="Suggested progression from last session"
-                  className="space-y-2 rounded-xl border border-accent-border bg-accent-soft p-3"
-                >
-                  <div className="flex items-start gap-2">
-                    <Sparkles
-                      size={14}
-                      className="mt-0.5 shrink-0 text-accent-text"
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
-                        Suggested from last workout
-                      </p>
-                      <p className="mt-0.5 text-[11px] font-medium text-ink">
-                        {currentPrevious.activeProgression.summaryText}
-                      </p>
-                    </div>
-                  </div>
-
-                  {isAdjustingPriorRec ? (
-                    <div className="space-y-2 rounded-xl border border-line bg-surface p-2.5">
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="block">
-                          <span className="text-[9px] font-semibold text-ink-secondary">
-                            Weight (kg)
-                          </span>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            max={1000}
-                            step="0.5"
-                            value={priorCustomWeight}
-                            onChange={(e) => setPriorCustomWeight(e.target.value)}
-                            className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-[9px] font-semibold text-ink-secondary">
-                            Reps
-                          </span>
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            max={500}
-                            value={priorCustomReps}
-                            onChange={(e) => setPriorCustomReps(e.target.value)}
-                            className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
-                          />
-                        </label>
-                      </div>
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setIsAdjustingPriorRec(false)}
-                          className={`${ui.btnSecondary} min-h-8 px-2.5 text-[10px]`}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handlePriorProgressionDecision("adjusted")}
-                          className={`${ui.btnPrimary} min-h-8 px-3 text-[10px]`}
-                        >
-                          Apply Adjusted Target
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void handlePriorProgressionDecision("accepted")}
-                        className={`${ui.btnPrimary} min-h-8 rounded-lg px-2.5 text-[10px]`}
-                      >
-                        <Check size={12} aria-hidden="true" />
-                        {currentPrevious.activeProgression.recommendedWeightKg > 0
-                          ? `Accept (${currentPrevious.activeProgression.recommendedWeightKg} kg × ${currentPrevious.activeProgression.recommendedReps})`
-                          : `Accept (${currentPrevious.activeProgression.recommendedReps} reps)`}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPriorCustomWeight(
-                            String(currentPrevious.activeProgression?.recommendedWeightKg ?? 0),
-                          );
-                          setPriorCustomReps(
-                            String(currentPrevious.activeProgression?.recommendedReps ?? 10),
-                          );
-                          setIsAdjustingPriorRec(true);
-                        }}
-                        className={`${ui.btnSecondary} min-h-8 rounded-lg px-2.5 text-[10px]`}
-                      >
-                        Adjust
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handlePriorProgressionDecision("ignored")}
-                        className={`${ui.btnGhost} min-h-8 rounded-lg px-2 text-[10px]`}
-                      >
-                        Ignore
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-          </div>
-
-          {/* 4. Focused Current Set Card (Fast +- Stepper + Swipe or 1-Tap Complete) */}
-          {currentSet ? (
-            <div
-              aria-label={`Current set ${currentSet.setNumber}`}
-              className="rounded-2xl border border-accent-border bg-surface p-3.5"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wide text-accent-text">
-                  {`Current Set · Set ${currentSet.setNumber} of ${currentExercise.sets.length}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsRestSettingsOpen(true)}
-                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary hover:bg-subtle hover:text-ink"
-                  aria-label="Configure rest timer"
-                >
-                  <Timer size={11} aria-hidden="true" />
-                  {`Rest ${getEffectiveExerciseRestSeconds(currentExercise)}s`}
+                  <span data-no-translate="true">{idx + 1}.</span>
+                  <span className="max-w-[115px] truncate">{ex.name}</span>
+                  {isAllDone && <Check size={11} strokeWidth={2.6} aria-hidden="true" />}
                 </button>
-              </div>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setIsAddExerciseOpen(true)}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-line-strong bg-surface px-2.5 py-1 text-[10px] font-semibold text-ink-secondary hover:text-accent-text"
+            >
+              <Plus size={11} aria-hidden="true" />
+              Exercise
+            </button>
+          </div>
+        </header>
 
-              <div className="mt-2.5 grid grid-cols-2 gap-2.5">
-                {/* Weight Quick Adjuster */}
-                <div className="rounded-xl border border-line bg-subtle p-2">
-                  <span className="block text-center text-[9px] font-semibold uppercase tracking-wide text-ink-muted">
-                    Weight (kg)
-                  </span>
-                  <div className="mt-1 flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      aria-label="Decrease current set weight by 2.5 kg"
-                      onClick={() =>
-                        updateSetValues(
-                          safeExIndex,
-                          currentSetIndex,
-                          { weightKg: stepWeightString(currentSet.weightKg, -2.5) },
-                          true,
-                        )
-                      }
-                      className="grid size-9 shrink-0 place-items-center rounded-lg border border-line-strong bg-surface text-ink-secondary active:scale-95"
-                    >
-                      <Minus size={14} aria-hidden="true" />
-                    </button>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      min={0}
-                      max={1000}
-                      step="0.5"
-                      aria-label={`Current Set ${currentSet.setNumber} weight kg`}
-                      value={currentSet.weightKg}
-                      onChange={(e) =>
-                        updateSetValues(
-                          safeExIndex,
-                          currentSetIndex,
-                          { weightKg: e.target.value },
-                          true,
-                        )
-                      }
-                      className="w-full min-w-0 bg-transparent text-center text-[18px] font-bold text-ink focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      aria-label="Increase current set weight by 2.5 kg"
-                      onClick={() =>
-                        updateSetValues(
-                          safeExIndex,
-                          currentSetIndex,
-                          { weightKg: stepWeightString(currentSet.weightKg, 2.5) },
-                          true,
-                        )
-                      }
-                      className="grid size-9 shrink-0 place-items-center rounded-lg border border-line-strong bg-surface text-ink-secondary active:scale-95"
-                    >
-                      <Plus size={14} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Reps Quick Adjuster */}
-                <div className="rounded-xl border border-line bg-subtle p-2">
-                  <span className="block text-center text-[9px] font-semibold uppercase tracking-wide text-ink-muted">
-                    Repetitions
-                  </span>
-                  <div className="mt-1 flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      aria-label="Decrease current set reps by 1"
-                      onClick={() =>
-                        updateSetValues(safeExIndex, currentSetIndex, {
-                          reps: stepRepsString(currentSet.reps, -1),
-                        })
-                      }
-                      className="grid size-9 shrink-0 place-items-center rounded-lg border border-line-strong bg-surface text-ink-secondary active:scale-95"
-                    >
-                      <Minus size={14} aria-hidden="true" />
-                    </button>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      max={500}
-                      aria-label={`Current Set ${currentSet.setNumber} reps`}
-                      value={currentSet.reps}
-                      onChange={(e) =>
-                        updateSetValues(safeExIndex, currentSetIndex, {
-                          reps: e.target.value,
-                        })
-                      }
-                      className="w-full min-w-0 bg-transparent text-center text-[18px] font-bold text-ink focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      aria-label="Increase current set reps by 1"
-                      onClick={() =>
-                        updateSetValues(safeExIndex, currentSetIndex, {
-                          reps: stepRepsString(currentSet.reps, 1),
-                        })
-                      }
-                      className="grid size-9 shrink-0 place-items-center rounded-lg border border-line-strong bg-surface text-ink-secondary active:scale-95"
-                    >
-                      <Plus size={14} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Swipe-to-Complete + Accessible Button */}
-              <SwipeSetCompletionBar
-                setNumber={currentSet.setNumber}
-                weightKg={currentSet.weightKg}
-                reps={currentSet.reps}
-                onComplete={() =>
-                  completeOrToggleSet(safeExIndex, currentSetIndex, true)
-                }
-              />
-            </div>
-          ) : (
+        {/* Scrollable Focused Workout Stage */}
+        <div
+          onPointerDown={handleStagePointerDown}
+          onPointerUp={handleStagePointerUp}
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3.5"
+        >
+          {/* Compact Non-Dominating Automatic Rest Timer Bar */}
+          {(restSnapshot.status === "running" || restSnapshot.status === "paused") && (
             <div
               role="region"
-              aria-label="Exercise feedback and progression"
-              className="space-y-3 rounded-2xl border border-accent-border bg-surface p-3.5"
+              aria-label="Active rest timer"
+              className={`space-y-2 rounded-2xl border p-3 transition-colors ${
+                restSnapshot.status === "paused"
+                  ? "border-warning-border bg-warning-soft"
+                  : restSnapshot.isFinalFive
+                    ? "border-accent bg-accent-soft"
+                    : "border-accent-border bg-accent-soft"
+              }`}
             >
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <CheckCircle2
-                    size={18}
-                    className="shrink-0 text-accent-text"
-                    aria-hidden="true"
-                  />
+                  <span
+                    className={`grid size-8 shrink-0 place-items-center rounded-xl ${
+                      restSnapshot.status === "paused"
+                        ? "border border-warning-border bg-surface text-warning-text"
+                        : "bg-accent text-on-accent"
+                    }`}
+                  >
+                    <Timer size={15} aria-hidden="true" />
+                  </span>
                   <div>
-                    <p className="text-[12px] font-semibold text-ink">
-                      {`All sets completed for ${currentExercise.name}`}
+                    <p className="text-[9px] font-semibold uppercase tracking-wider text-accent-text">
+                      {restSnapshot.status === "paused"
+                        ? "Paused"
+                        : restSnapshot.isFinalFive
+                          ? "Get Ready"
+                          : "Rest Timer"}
                     </p>
-                    <p className="text-[10px] text-ink-secondary">
-                      {currentExercise.feedback && !isEditingFeedbackRating
-                        ? "Feedback recorded · Review your next-session target below"
-                        : "Optional · 1 tap to personalize your next session"}
+                    <p
+                      data-no-translate="true"
+                      aria-live="off"
+                      className="font-mono text-[20px] font-bold leading-none tracking-tight text-ink"
+                    >
+                      {formatClock(restSnapshot.remainingSeconds)}
                     </p>
                   </div>
                 </div>
-                {nextIncompleteExerciseIdx >= 0 && (
+
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => selectExerciseIndex(nextIncompleteExerciseIdx)}
-                    className={`${ui.btnSecondary} min-h-8 shrink-0 rounded-lg px-2.5 text-[10px]`}
+                    aria-label="Reduce rest by 15 seconds"
+                    onClick={() => adjustRestTimer(-15)}
+                    className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
                   >
-                    {currentExercise.feedback ? "Next Exercise" : "Skip"}
+                    <span data-no-translate="true">-15s</span>
                   </button>
-                )}
+                  <button
+                    type="button"
+                    aria-label="Add 15 seconds to rest"
+                    onClick={() => adjustRestTimer(15)}
+                    className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
+                  >
+                    <span data-no-translate="true">+15s</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={
+                      restSnapshot.status === "paused"
+                        ? "Resume rest timer"
+                        : "Pause rest timer"
+                    }
+                    onClick={togglePauseRestTimer}
+                    className={`${ui.btnSecondary} min-h-8 rounded-lg px-2 text-[10px]`}
+                  >
+                    {restSnapshot.status === "paused" ? "Resume" : "Pause"}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Skip rest timer"
+                    onClick={clearRestTimer}
+                    className={`${ui.btnPrimary} min-h-8 rounded-lg px-2.5 text-[10px]`}
+                  >
+                    Skip
+                  </button>
+                </div>
               </div>
 
-              {!currentExercise.feedback || isEditingFeedbackRating ? (
-                <div className="space-y-2.5 rounded-xl border border-line bg-subtle p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[13px] font-bold text-ink">
-                      How did that feel?
-                    </p>
-                    <button
-                      type="button"
-                      aria-pressed={discomfortDraft}
-                      onClick={() => setDiscomfortDraft((v) => !v)}
-                      className={`inline-flex min-h-7 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[9px] font-semibold transition-colors ${
-                        discomfortDraft
-                          ? "border-warning-border bg-warning-soft text-warning-text"
-                          : "border-line-strong bg-surface text-ink-secondary hover:text-ink"
-                      }`}
-                    >
-                      <AlertTriangle size={11} aria-hidden="true" />
-                      {discomfortDraft ? "Discomfort noted" : "Any discomfort?"}
-                    </button>
+              <div className="h-1 overflow-hidden rounded-full bg-surface">
+                <div
+                  className={`h-full rounded-full transition-[width] duration-150 ${
+                    restSnapshot.status === "paused" ? "bg-warning-text" : "bg-accent"
+                  }`}
+                  style={{ width: `${Math.round(restSnapshot.progressRatio * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {restCompleteNotice && restSnapshot.status === "idle" && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3 py-2 text-[11px] font-semibold text-accent-text"
+            >
+              <span>Rest complete · Ready for your next set</span>
+              <button
+                type="button"
+                onClick={() => setRestCompleteNotice(false)}
+                className="text-[10px] text-ink-secondary hover:text-ink"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {autoAdvanceBanner && (
+            <div
+              role="status"
+              className="flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3 py-2 text-[11px] font-semibold text-accent-text"
+            >
+              <span className="truncate">{autoAdvanceBanner}</span>
+              {sessionTotals.completedSets === sessionTotals.totalSets &&
+                sessionTotals.totalSets > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsFinishModalOpen(true)}
+                    className="shrink-0 underline"
+                  >
+                    Finish Now
+                  </button>
+                )}
+            </div>
+          )}
+
+          {playerError && (
+            <p
+              role="alert"
+              className="rounded-xl border border-danger-border bg-danger-soft px-3 py-2 text-[11px] text-danger-text"
+            >
+              {playerError}
+            </p>
+          )}
+
+          {/* DEDICATED FOCUSED EXERCISE STAGE (Setup -> Demo -> Set-Tracking -> Difficulty) */}
+          {currentExercise ? (
+            <div className={`${ui.cardElevated} space-y-4 p-4`}>
+              {/* Top Exercise Header + Step Pills */}
+              <div className="space-y-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={ui.badgeNeutral}>{currentExercise.muscle}</span>
+                      <span className="text-[10px] font-medium text-ink-muted">
+                        {`Exercise ${safeExIndex + 1} of ${session.exercises.length}`}
+                      </span>
+                    </div>
+                    <h2 className="mt-1.5 text-[20px] font-bold tracking-[-0.03em] text-ink">
+                      {currentExercise.name}
+                    </h2>
                   </div>
 
-                  {discomfortDraft && (
-                    <p className="rounded-lg border border-warning-border bg-warning-soft px-2.5 py-1.5 text-[10px] text-warning-text">
-                      Weight increases are automatically paused whenever discomfort is reported.
-                    </p>
+                  {currentExerciseHistory && currentExerciseHistory.totalSessions > 0 && (
+                    <button
+                      type="button"
+                      aria-label="Open exercise history"
+                      onClick={() => setIsExerciseHistoryOpen(true)}
+                      className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-xl border border-line-strong bg-subtle px-2.5 text-[10px] font-semibold text-ink-secondary hover:text-ink"
+                    >
+                      <History size={12} aria-hidden="true" />
+                      History
+                    </button>
                   )}
+                </div>
 
-                  {/* Quick 1-Tap 1..10 Difficulty Scale */}
+                {/* Focused Step Switcher: Setup · Demo · Track */}
+                {currentSet !== null && (
                   <div
-                    role="group"
-                    aria-label="How did that feel difficulty scale 1 to 10"
-                    className="grid grid-cols-5 gap-1.5"
+                    role="tablist"
+                    aria-label="Exercise workflow step"
+                    className={`grid grid-cols-3 gap-1 ${ui.segmentedTrack}`}
                   >
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
-                      const isSelected =
-                        currentExercise.feedback?.difficultyRating === score;
-                      const isHighEffort = score >= 9;
+                    {(
+                      [
+                        { id: "setup", label: "Setup" },
+                        { id: "demo", label: "Demo" },
+                        { id: "track", label: "Track Sets" },
+                      ] as const
+                    ).map((step) => {
+                      const active = exercisePhase === step.id;
                       return (
                         <button
-                          key={score}
+                          key={step.id}
                           type="button"
-                          aria-label={`Difficulty ${score} out of 10 (${describeDifficultyRating(score)})`}
-                          aria-pressed={isSelected}
-                          onClick={() => submitExerciseDifficulty(score)}
-                          className={`flex min-h-10 flex-col items-center justify-center rounded-xl border text-[12px] font-bold transition-colors active:scale-95 ${
-                            isSelected
-                              ? "border-accent bg-accent text-on-accent"
-                              : isHighEffort
-                                ? "border-warning-border bg-surface text-ink hover:bg-warning-soft"
-                                : "border-line-strong bg-surface text-ink hover:border-accent-border hover:bg-accent-soft"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => {
+                            if (step.id !== "setup") {
+                              configuredExercisesRef.current.add(safeExIndex);
+                            }
+                            setExercisePhase(step.id);
+                          }}
+                          className={`min-h-8 rounded-xl text-[10px] font-semibold transition-colors ${
+                            active
+                              ? "bg-elevated text-ink shadow-xs"
+                              : "text-ink-secondary hover:text-ink"
                           }`}
                         >
-                          <span data-no-translate="true">{score}</span>
+                          {step.label}
                         </button>
                       );
                     })}
                   </div>
+                )}
+              </div>
 
-                  {/* Clear Scale Legend */}
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5 text-[9px] text-ink-muted">
-                    <span>1–2: Extremely easy</span>
-                    <span>3–4: Easy</span>
-                    <span>5–6: Moderate</span>
-                    <span>7–8: Difficult</span>
-                    <span>9: Extremely difficult</span>
-                    <span>10: Maximum effort</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2.5 rounded-xl border border-accent-border bg-accent-soft p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className={ui.badgeAccent}>
-                        {`Felt ${currentExercise.feedback.difficultyRating}/10 · ${describeDifficultyRating(currentExercise.feedback.difficultyRating)}`}
-                      </span>
-                      {currentExercise.feedback.reportedDiscomfort && (
-                        <span className={ui.badgeWarning}>Discomfort noted</span>
-                      )}
+              {/* ========================================================= */}
+              {/* PHASE B: EXERCISE SETUP SCREEN (3 Vertical Rolling Wheels) */}
+              {/* ========================================================= */}
+              {currentSet !== null && exercisePhase === "setup" && (
+                <div className="space-y-3.5" aria-label="Exercise setup">
+                  {/* Subtle Previous Memory + Pending Progression Chip */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-subtle px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-semibold uppercase tracking-wider text-ink-muted">
+                        Previous performance
+                      </p>
+                      <p className="mt-0.5 text-[11px] font-semibold text-ink">
+                        {currentPrevious &&
+                        ((currentPrevious.lastPerformedWeightKg ??
+                          currentPrevious.lastWeightKg) > 0 ||
+                          (currentPrevious.lastPerformedReps ??
+                            currentPrevious.lastReps) > 0) ? (
+                          <span data-no-translate="true">
+                            {currentPrevious.lastPerformedWeightKg ??
+                              currentPrevious.lastWeightKg}{" "}
+                            kg ×{" "}
+                            {currentPrevious.lastPerformedReps ??
+                              currentPrevious.lastReps}{" "}
+                            reps
+                          </span>
+                        ) : (
+                          <span className="text-ink-secondary">
+                            First session · Smart defaults ready
+                          </span>
+                        )}
+                      </p>
                     </div>
+                    {currentPrevious && currentPrevious.bestWeightKg > 0 && (
+                      <span className={ui.badgeAccent} data-no-translate="true">
+                        {`PR ${currentPrevious.bestWeightKg} kg × ${currentPrevious.bestRepsAtMaxWeight}`}
+                      </span>
+                    )}
+                  </div>
+
+                  {currentPrevious?.activeProgression &&
+                    currentPrevious.activeProgression.decision === "pending" &&
+                    !dismissedPriorRecKeys.includes(
+                      currentExercise.name.trim().toLowerCase(),
+                    ) && (
+                      <div
+                        role="region"
+                        aria-label="Suggested progression from last session"
+                        className="space-y-2 rounded-xl border border-accent-border bg-accent-soft p-3"
+                      >
+                        <div className="flex items-start gap-2">
+                          <Sparkles
+                            size={14}
+                            className="mt-0.5 shrink-0 text-accent-text"
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
+                              Suggested from last workout
+                            </p>
+                            <p className="mt-0.5 text-[11px] font-medium text-ink">
+                              {currentPrevious.activeProgression.summaryText}
+                            </p>
+                          </div>
+                        </div>
+
+                        {isAdjustingPriorRec ? (
+                          <div className="space-y-2 rounded-xl border border-line bg-surface p-2.5">
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="block">
+                                <span className="text-[9px] font-semibold text-ink-secondary">
+                                  Weight (kg)
+                                </span>
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  min={0}
+                                  max={1000}
+                                  step="0.5"
+                                  value={priorCustomWeight}
+                                  onChange={(e) => setPriorCustomWeight(e.target.value)}
+                                  className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-[9px] font-semibold text-ink-secondary">
+                                  Reps
+                                </span>
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  max={500}
+                                  value={priorCustomReps}
+                                  onChange={(e) => setPriorCustomReps(e.target.value)}
+                                  className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
+                                />
+                              </label>
+                            </div>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setIsAdjustingPriorRec(false)}
+                                className={`${ui.btnSecondary} min-h-8 px-2.5 text-[10px]`}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handlePriorProgressionDecision("adjusted")}
+                                className={`${ui.btnPrimary} min-h-8 px-3 text-[10px]`}
+                              >
+                                Apply Adjusted Target
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void handlePriorProgressionDecision("accepted")}
+                              className={`${ui.btnPrimary} min-h-8 rounded-lg px-2.5 text-[10px]`}
+                            >
+                              <Check size={12} aria-hidden="true" />
+                              {currentPrevious.activeProgression.recommendedWeightKg > 0
+                                ? `Accept (${currentPrevious.activeProgression.recommendedWeightKg} kg × ${currentPrevious.activeProgression.recommendedReps})`
+                                : `Accept (${currentPrevious.activeProgression.recommendedReps} reps)`}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPriorCustomWeight(
+                                  String(
+                                    currentPrevious.activeProgression?.recommendedWeightKg ??
+                                      0,
+                                  ),
+                                );
+                                setPriorCustomReps(
+                                  String(
+                                    currentPrevious.activeProgression?.recommendedReps ?? 10,
+                                  ),
+                                );
+                                setIsAdjustingPriorRec(true);
+                              }}
+                              className={`${ui.btnSecondary} min-h-8 rounded-lg px-2.5 text-[10px]`}
+                            >
+                              Adjust
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handlePriorProgressionDecision("ignored")}
+                              className={`${ui.btnGhost} min-h-8 rounded-lg px-2 text-[10px]`}
+                            >
+                              Ignore
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  {/* Three Smooth Vertical Rolling Pickers: Weight · Reps · Sets */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <WheelNumberPicker
+                      label="Weight"
+                      unit="kg"
+                      values={WEIGHT_KG_WHEEL_VALUES}
+                      value={setupWeightKgVal}
+                      onChange={(nextW) => applyExerciseSetupConfig({ weightKg: nextW })}
+                      ariaLabel={`${currentExercise.name} setup weight kg`}
+                      minCustom={0}
+                      maxCustom={1000}
+                      stepCustom={0.5}
+                    />
+                    <WheelNumberPicker
+                      label="Reps"
+                      values={REPS_WHEEL_VALUES}
+                      value={setupRepsVal}
+                      onChange={(nextR) => applyExerciseSetupConfig({ reps: nextR })}
+                      ariaLabel={`${currentExercise.name} setup repetitions`}
+                      minCustom={1}
+                      maxCustom={500}
+                      stepCustom={1}
+                    />
+                    <WheelNumberPicker
+                      label="Sets"
+                      values={SETS_WHEEL_VALUES}
+                      value={setupSetsCountVal}
+                      onChange={(nextS) => applyExerciseSetupConfig({ setsCount: nextS })}
+                      ariaLabel={`${currentExercise.name} setup sets`}
+                      minCustom={1}
+                      maxCustom={20}
+                      stepCustom={1}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 pt-1">
                     <button
                       type="button"
-                      onClick={() => setIsEditingFeedbackRating(true)}
-                      className="text-[10px] font-semibold text-ink-secondary underline hover:text-ink"
+                      onClick={() => {
+                        configuredExercisesRef.current.add(safeExIndex);
+                        setExercisePhase("demo");
+                      }}
+                      className={`${ui.btnPrimary} min-h-12 w-full rounded-2xl text-[13px]`}
                     >
-                      Edit rating
+                      <span>Next: Exercise Demo</span>
+                      <ArrowRight size={15} className="rtl:rotate-180" aria-hidden="true" />
+                    </button>
+                    <p className="text-center text-[10px] text-ink-muted">
+                      Roll numbers to set your plan · Swipe or tap Next
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PHASE C: MINIMAL EXERCISE DEMONSTRATION SCREEN            */}
+              {/* ========================================================= */}
+              {currentSet !== null && exercisePhase === "demo" && (
+                <div className="space-y-3.5" aria-label="Exercise demonstration">
+                  <div className="flex items-center justify-between rounded-xl border border-line bg-subtle px-3 py-2 text-[11px]">
+                    <span className="text-ink-secondary">Planned target</span>
+                    <span data-no-translate="true" className="font-bold text-ink">
+                      {setupSetsCountVal} × {setupRepsVal}
+                      {setupWeightKgVal > 0 ? ` · ${setupWeightKgVal} kg` : ""}
+                    </span>
+                  </div>
+
+                  <ExerciseDemoVisual
+                    exerciseName={currentExercise.name}
+                    muscle={currentExercise.muscle}
+                    mediaCatalog={exerciseMediaCatalog}
+                  />
+
+                  <div className="grid grid-cols-[auto_1fr] gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setExercisePhase("setup")}
+                      className={`${ui.btnSecondary} min-h-12 rounded-2xl px-3.5 text-[11px]`}
+                    >
+                      <ArrowLeft size={14} className="rtl:rotate-180" aria-hidden="true" />
+                      Setup
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        configuredExercisesRef.current.add(safeExIndex);
+                        setExercisePhase("track");
+                      }}
+                      className={`${ui.btnPrimary} min-h-12 rounded-2xl px-4 text-[13px]`}
+                    >
+                      <span>Start Sets</span>
+                      <ArrowRight size={15} className="rtl:rotate-180" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <p className="text-center text-[10px] text-ink-muted">
+                    Swipe or tap Start Sets when ready
+                  </p>
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PHASE D: FOCUSED SET-TRACKING SCREEN (Actual Performed)   */}
+              {/* ========================================================= */}
+              {currentSet !== null && exercisePhase === "track" && (
+                <div
+                  aria-label={`Current set ${currentSet.setNumber}`}
+                  className="space-y-3.5"
+                >
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft px-3 py-2">
+                    <span className="text-[12px] font-bold text-accent-text">
+                      {`Current Set · Set ${currentSet.setNumber} of ${currentExercise.sets.length}`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsRestSettingsOpen(true)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-surface px-2 py-1 text-[10px] font-semibold text-ink-secondary hover:text-ink"
+                      aria-label="Configure rest timer"
+                    >
+                      <Timer size={11} aria-hidden="true" />
+                      {`Rest ${getEffectiveExerciseRestSeconds(currentExercise)}s`}
                     </button>
                   </div>
 
-                  <p className="text-[12px] font-semibold leading-snug text-ink">
-                    {currentExercise.feedback.summaryText}
-                  </p>
-
-                  {/* Member Control: Accept / Adjust / Ignore */}
-                  {isAdjustingRecommendation ? (
-                    <div className="space-y-2 rounded-xl border border-line bg-surface p-2.5">
-                      <p className="text-[10px] font-semibold text-ink">
-                        Customize target for your next session
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="block">
-                          <span className="text-[9px] font-semibold text-ink-secondary">
-                            Next Weight (kg)
-                          </span>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            max={1000}
-                            step="0.5"
-                            aria-label="Adjust recommended weight kg"
-                            value={customRecWeight}
-                            onChange={(e) => setCustomRecWeight(e.target.value)}
-                            className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-[9px] font-semibold text-ink-secondary">
-                            Next Reps
-                          </span>
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            max={500}
-                            aria-label="Adjust recommended repetitions"
-                            value={customRecReps}
-                            onChange={(e) => setCustomRecReps(e.target.value)}
-                            className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
-                          />
-                        </label>
-                      </div>
-                      <div className="flex items-center justify-end gap-1.5">
+                  {/* Compact Set Chips (Tap any completed set to undo/adjust, or + Set) */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {currentExercise.sets.map((s, setIdx) => {
+                      const isCurrent = setIdx === currentSetIndex;
+                      return (
                         <button
+                          key={s.setNumber}
                           type="button"
-                          onClick={() => setIsAdjustingRecommendation(false)}
-                          className={`${ui.btnSecondary} min-h-8 px-2.5 text-[10px]`}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            respondToExerciseFeedback(
-                              "adjusted",
-                              customRecWeight,
-                              customRecReps,
-                            )
+                          onClick={() => {
+                            if (s.completed) {
+                              completeOrToggleSet(safeExIndex, setIdx, false);
+                            }
+                          }}
+                          title={
+                            s.completed
+                              ? "Tap to reopen this set"
+                              : `Set ${s.setNumber}`
                           }
-                          className={`${ui.btnPrimary} min-h-8 px-3 text-[10px]`}
+                          className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                            s.completed
+                              ? "border-accent bg-accent text-on-accent"
+                              : isCurrent
+                                ? "border-accent-border bg-surface text-accent-text"
+                                : "border-line bg-subtle text-ink-muted"
+                          }`}
                         >
-                          Save Adjusted Target
+                          <span data-no-translate="true">
+                            {s.completed
+                              ? `S${s.setNumber}: ${
+                                  Number(s.weightKg) > 0 ? `${s.weightKg}kg×` : ""
+                                }${s.reps}`
+                              : `S${s.setNumber}`}
+                          </span>
+                          {s.completed && <Check size={10} strokeWidth={2.8} aria-hidden="true" />}
                         </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={addSetToCurrentExercise}
+                      className="inline-flex items-center gap-0.5 rounded-xl border border-dashed border-line-strong bg-surface px-2 py-1 text-[10px] font-semibold text-ink-secondary hover:text-accent-text"
+                    >
+                      <Plus size={11} aria-hidden="true" />
+                      Add Set
+                    </button>
+                  </div>
+
+                  {/* Actual Weight & Actual Reps Vertical Rolling Pickers */}
+                  <div>
+                    <p className="mb-1.5 text-center text-[10px] font-medium text-ink-secondary">
+                      Record actual weight &amp; reps performed for this set
+                    </p>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <WheelNumberPicker
+                        label="Actual Weight"
+                        unit="kg"
+                        values={WEIGHT_KG_WHEEL_VALUES}
+                        value={Math.max(0, Number.parseFloat(currentSet.weightKg) || 0)}
+                        onChange={(nextW) =>
+                          updateSetValues(
+                            safeExIndex,
+                            currentSetIndex,
+                            { weightKg: String(nextW) },
+                            true,
+                          )
+                        }
+                        ariaLabel={`Current Set ${currentSet.setNumber} weight kg`}
+                        minCustom={0}
+                        maxCustom={1000}
+                        stepCustom={0.5}
+                        compact
+                      />
+                      <WheelNumberPicker
+                        label="Actual Reps"
+                        values={REPS_WHEEL_VALUES}
+                        value={Math.max(1, Number.parseInt(currentSet.reps, 10) || 1)}
+                        onChange={(nextR) =>
+                          updateSetValues(safeExIndex, currentSetIndex, {
+                            reps: String(nextR),
+                          })
+                        }
+                        ariaLabel={`Current Set ${currentSet.setNumber} reps`}
+                        minCustom={1}
+                        maxCustom={500}
+                        stepCustom={1}
+                        compact
+                      />
+                    </div>
+                  </div>
+
+                  {/* Swipe-to-Complete + 1-Tap Complete Set Button */}
+                  <SwipeSetCompletionBar
+                    setNumber={currentSet.setNumber}
+                    weightKg={currentSet.weightKg}
+                    reps={currentSet.reps}
+                    onComplete={() =>
+                      completeOrToggleSet(safeExIndex, currentSetIndex, true)
+                    }
+                  />
+
+                  {currentExercise.notes && (
+                    <p className="rounded-xl border border-line bg-subtle px-3 py-2 text-[10px] text-ink-secondary">
+                      Note: {currentExercise.notes}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* ========================================================= */}
+              {/* PHASE E/F: EXERCISE DIFFICULTY (1–10) & NEXT PROGRESSION  */}
+              {/* ========================================================= */}
+              {currentSet === null && (
+                <div
+                  role="region"
+                  aria-label="Exercise feedback and progression"
+                  className="space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-2 rounded-xl border border-accent-border bg-accent-soft p-3">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2
+                        size={18}
+                        className="shrink-0 text-accent-text"
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <p className="text-[12px] font-semibold text-ink">
+                          {`All sets completed for ${currentExercise.name}`}
+                        </p>
+                        <p className="text-[10px] text-ink-secondary">
+                          {currentExercise.feedback && !isEditingFeedbackRating
+                            ? "Feedback recorded · Review your next-session target below"
+                            : "1 tap to rate difficulty & personalize your next session"}
+                        </p>
                       </div>
                     </div>
-                  ) : currentExercise.feedback.decision === "pending" ? (
-                    <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={addSetToCurrentExercise}
+                      className={`${ui.btnSecondary} min-h-8 shrink-0 rounded-lg px-2 text-[10px]`}
+                    >
+                      <Plus size={11} aria-hidden="true" />
+                      Add Set
+                    </button>
+                  </div>
+
+                  {/* Logged Actual Sets Recap */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {currentExercise.sets.map((s) => (
                       <button
+                        key={s.setNumber}
                         type="button"
-                        onClick={() => respondToExerciseFeedback("accepted")}
-                        className={`${ui.btnPrimary} min-h-9 rounded-xl px-3 text-[10px]`}
+                        onClick={() => completeOrToggleSet(safeExIndex, s.setNumber - 1, false)}
+                        title="Tap to edit this set"
+                        className="inline-flex items-center gap-1 rounded-lg border border-line bg-subtle px-2.5 py-1 text-[10px] font-semibold text-ink"
                       >
-                        <Check size={13} aria-hidden="true" />
-                        {currentExercise.feedback.recommendedWeightKg > 0
-                          ? `Accept (${currentExercise.feedback.recommendedWeightKg} kg × ${currentExercise.feedback.recommendedReps})`
-                          : `Accept (${currentExercise.feedback.recommendedReps} reps)`}
+                        <span data-no-translate="true">
+                          S{s.setNumber}: {Number(s.weightKg) > 0 ? `${s.weightKg} kg × ` : ""}
+                          {s.reps}
+                        </span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomRecWeight(
-                            String(currentExercise.feedback?.recommendedWeightKg ?? 0),
+                    ))}
+                  </div>
+
+                  {!currentExercise.feedback || isEditingFeedbackRating ? (
+                    <div className="space-y-2.5 rounded-xl border border-line bg-subtle p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[13px] font-bold text-ink">
+                          How did that feel?
+                        </p>
+                        <button
+                          type="button"
+                          aria-pressed={discomfortDraft}
+                          onClick={() => setDiscomfortDraft((v) => !v)}
+                          className={`inline-flex min-h-7 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[9px] font-semibold transition-colors ${
+                            discomfortDraft
+                              ? "border-warning-border bg-warning-soft text-warning-text"
+                              : "border-line-strong bg-surface text-ink-secondary hover:text-ink"
+                          }`}
+                        >
+                          <AlertTriangle size={11} aria-hidden="true" />
+                          {discomfortDraft ? "Discomfort noted" : "Any discomfort?"}
+                        </button>
+                      </div>
+
+                      {discomfortDraft && (
+                        <p className="rounded-lg border border-warning-border bg-warning-soft px-2.5 py-1.5 text-[10px] text-warning-text">
+                          Weight increases are automatically paused whenever discomfort is reported.
+                        </p>
+                      )}
+
+                      <div
+                        role="group"
+                        aria-label="How did that feel difficulty scale 1 to 10"
+                        className="grid grid-cols-5 gap-1.5"
+                      >
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
+                          const isSelected =
+                            currentExercise.feedback?.difficultyRating === score;
+                          const isHighEffort = score >= 9;
+                          return (
+                            <button
+                              key={score}
+                              type="button"
+                              aria-label={`Difficulty ${score} out of 10 (${describeDifficultyRating(score)})`}
+                              aria-pressed={isSelected}
+                              onClick={() => submitExerciseDifficulty(score)}
+                              className={`flex min-h-10 flex-col items-center justify-center rounded-xl border text-[12px] font-bold transition-colors active:scale-95 ${
+                                isSelected
+                                  ? "border-accent bg-accent text-on-accent"
+                                  : isHighEffort
+                                    ? "border-warning-border bg-surface text-ink hover:bg-warning-soft"
+                                    : "border-line-strong bg-surface text-ink hover:border-accent-border hover:bg-accent-soft"
+                              }`}
+                            >
+                              <span data-no-translate="true">{score}</span>
+                            </button>
                           );
-                          setCustomRecReps(
-                            String(currentExercise.feedback?.recommendedReps ?? 10),
-                          );
-                          setIsAdjustingRecommendation(true);
-                        }}
-                        className={`${ui.btnSecondary} min-h-9 rounded-xl px-2.5 text-[10px]`}
-                      >
-                        Adjust
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => respondToExerciseFeedback("ignored")}
-                        className={`${ui.btnGhost} min-h-9 rounded-xl px-2.5 text-[10px]`}
-                      >
-                        Ignore
-                      </button>
+                        })}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 pt-0.5 text-[9px] text-ink-muted">
+                        <span>1–2: Extremely easy</span>
+                        <span>3–4: Easy</span>
+                        <span>5–6: Moderate</span>
+                        <span>7–8: Difficult</span>
+                        <span>9: Extremely difficult</span>
+                        <span>10: Maximum effort</span>
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-[10px]">
-                      <span className="font-semibold text-ink">
-                        {currentExercise.feedback.decision === "accepted"
-                          ? `Accepted for next session: ${
-                              (currentExercise.feedback.appliedWeightKg ??
-                                currentExercise.feedback.recommendedWeightKg) > 0
-                                ? `${currentExercise.feedback.appliedWeightKg ?? currentExercise.feedback.recommendedWeightKg} kg × `
-                                : ""
-                            }${currentExercise.feedback.appliedReps ?? currentExercise.feedback.recommendedReps} reps`
-                          : currentExercise.feedback.decision === "adjusted"
-                            ? `Adjusted for next session: ${
-                                (currentExercise.feedback.appliedWeightKg ?? 0) > 0
-                                  ? `${currentExercise.feedback.appliedWeightKg} kg × `
-                                  : ""
-                              }${currentExercise.feedback.appliedReps ?? currentExercise.feedback.recommendedReps} reps`
-                            : "Suggestion ignored · Keeping your current target"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => respondToExerciseFeedback("pending")}
-                        className="shrink-0 font-semibold text-accent-text underline"
-                      >
-                        Change
-                      </button>
+                    <div className="space-y-2.5 rounded-xl border border-accent-border bg-accent-soft p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={ui.badgeAccent}>
+                            {`Felt ${currentExercise.feedback.difficultyRating}/10 · ${describeDifficultyRating(currentExercise.feedback.difficultyRating)}`}
+                          </span>
+                          {currentExercise.feedback.reportedDiscomfort && (
+                            <span className={ui.badgeWarning}>Discomfort noted</span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingFeedbackRating(true)}
+                          className="text-[10px] font-semibold text-ink-secondary underline hover:text-ink"
+                        >
+                          Edit rating
+                        </button>
+                      </div>
+
+                      <p className="text-[12px] font-semibold leading-snug text-ink">
+                        {currentExercise.feedback.summaryText}
+                      </p>
+
+                      {isAdjustingRecommendation ? (
+                        <div className="space-y-2 rounded-xl border border-line bg-surface p-2.5">
+                          <p className="text-[10px] font-semibold text-ink">
+                            Customize target for your next session
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="block">
+                              <span className="text-[9px] font-semibold text-ink-secondary">
+                                Next Weight (kg)
+                              </span>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                max={1000}
+                                step="0.5"
+                                aria-label="Adjust recommended weight kg"
+                                value={customRecWeight}
+                                onChange={(e) => setCustomRecWeight(e.target.value)}
+                                className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-[9px] font-semibold text-ink-secondary">
+                                Next Reps
+                              </span>
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                max={500}
+                                aria-label="Adjust recommended repetitions"
+                                value={customRecReps}
+                                onChange={(e) => setCustomRecReps(e.target.value)}
+                                className={`${ui.inputCompact} mt-1 min-h-9 text-center font-semibold`}
+                              />
+                            </label>
+                          </div>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setIsAdjustingRecommendation(false)}
+                              className={`${ui.btnSecondary} min-h-8 px-2.5 text-[10px]`}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                respondToExerciseFeedback(
+                                  "adjusted",
+                                  customRecWeight,
+                                  customRecReps,
+                                )
+                              }
+                              className={`${ui.btnPrimary} min-h-8 px-3 text-[10px]`}
+                            >
+                              Save Adjusted Target
+                            </button>
+                          </div>
+                        </div>
+                      ) : currentExercise.feedback.decision === "pending" ? (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => respondToExerciseFeedback("accepted")}
+                            className={`${ui.btnPrimary} min-h-9 rounded-xl px-3 text-[10px]`}
+                          >
+                            <Check size={13} aria-hidden="true" />
+                            {currentExercise.feedback.recommendedWeightKg > 0
+                              ? `Accept (${currentExercise.feedback.recommendedWeightKg} kg × ${currentExercise.feedback.recommendedReps})`
+                              : `Accept (${currentExercise.feedback.recommendedReps} reps)`}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustomRecWeight(
+                                String(currentExercise.feedback?.recommendedWeightKg ?? 0),
+                              );
+                              setCustomRecReps(
+                                String(currentExercise.feedback?.recommendedReps ?? 10),
+                              );
+                              setIsAdjustingRecommendation(true);
+                            }}
+                            className={`${ui.btnSecondary} min-h-9 rounded-xl px-2.5 text-[10px]`}
+                          >
+                            Adjust
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => respondToExerciseFeedback("ignored")}
+                            className={`${ui.btnGhost} min-h-9 rounded-xl px-2.5 text-[10px]`}
+                          >
+                            Ignore
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-[10px]">
+                          <span className="font-semibold text-ink">
+                            {currentExercise.feedback.decision === "accepted"
+                              ? `Accepted for next session: ${
+                                  (currentExercise.feedback.appliedWeightKg ??
+                                    currentExercise.feedback.recommendedWeightKg) > 0
+                                    ? `${currentExercise.feedback.appliedWeightKg ?? currentExercise.feedback.recommendedWeightKg} kg × `
+                                    : ""
+                                }${currentExercise.feedback.appliedReps ?? currentExercise.feedback.recommendedReps} reps`
+                              : currentExercise.feedback.decision === "adjusted"
+                                ? `Adjusted for next session: ${
+                                    (currentExercise.feedback.appliedWeightKg ?? 0) > 0
+                                      ? `${currentExercise.feedback.appliedWeightKg} kg × `
+                                      : ""
+                                  }${currentExercise.feedback.appliedReps ?? currentExercise.feedback.recommendedReps} reps`
+                                : "Suggestion ignored · Keeping your current target"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => respondToExerciseFeedback("pending")}
+                            className="shrink-0 font-semibold text-accent-text underline"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      )}
+
+                      <p className="text-[9px] leading-snug text-ink-muted">
+                        Automated suggestion from your logged sets — not medical advice or personal coaching. Saved routines are never changed automatically.
+                      </p>
                     </div>
                   )}
 
-                  <p className="text-[9px] leading-snug text-ink-muted">
-                    Automated suggestion from your logged sets — not medical advice or personal coaching. Saved routines are never changed automatically.
-                  </p>
-
-                  {nextIncompleteExerciseIdx >= 0 && (
+                  {nextIncompleteExerciseIdx >= 0 ? (
                     <button
                       type="button"
                       onClick={() => selectExerciseIndex(nextIncompleteExerciseIdx)}
-                      className={`${ui.btnPrimary} flex min-h-10 w-full rounded-xl text-[11px]`}
+                      className={`${ui.btnPrimary} flex min-h-12 w-full rounded-2xl text-[13px]`}
                     >
                       {`Continue to ${session.exercises[nextIncompleteExerciseIdx]?.name ?? "Next Exercise"}`}
-                      <ArrowRight size={14} className="rtl:rotate-180" aria-hidden="true" />
+                      <ArrowRight size={15} className="rtl:rotate-180" aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPlayerError("");
+                        setIsFinishModalOpen(true);
+                      }}
+                      className={`${ui.btnPrimary} flex min-h-12 w-full rounded-2xl text-[13px]`}
+                    >
+                      <CheckCircle2 size={16} aria-hidden="true" />
+                      <span>{`Finish Workout (${sessionTotals.completedSets})`}</span>
                     </button>
                   )}
                 </div>
               )}
             </div>
-          )}
-
-          {/* 5. Current Workout Set Breakdown (Set 1, Set 2, Set 3...) */}
-          <div>
-            <div className="mb-1.5 flex items-center justify-between px-0.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
-                Current workout sets
+          ) : (
+            <div className="rounded-2xl border border-dashed border-line-strong bg-surface p-6 text-center">
+              <p className="text-[14px] font-semibold text-ink">
+                Pick your first exercise to begin
+              </p>
+              <p className="mt-1 text-[11px] text-ink-secondary">
+                Tap below to select an exercise — your last weights and reps load automatically.
               </p>
               <button
                 type="button"
-                onClick={addSetToCurrentExercise}
-                className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent-text hover:underline"
+                onClick={() => setIsAddExerciseOpen(true)}
+                className={`${ui.btnPrimary} mt-4 min-h-11 rounded-2xl px-5 text-[12px]`}
               >
-                <Plus size={12} aria-hidden="true" />
-                Add Set
+                <Plus size={14} aria-hidden="true" />
+                Choose Exercise
               </button>
             </div>
-
-            <div className="space-y-1.5">
-              {currentExercise.sets.map((s, setIdx) => {
-                const isCurrent = setIdx === currentSetIndex;
-                return (
-                  <div
-                    key={s.setNumber}
-                    className={`grid grid-cols-[54px_1fr_1fr_42px] items-center gap-2 rounded-xl border px-2.5 py-1.5 transition-colors ${
-                      s.completed
-                        ? "border-accent-border bg-accent-soft"
-                        : isCurrent
-                          ? "border-line-strong bg-surface"
-                          : "border-line bg-subtle"
-                    }`}
-                  >
-                    <span className="text-[11px] font-semibold text-ink">
-                      Set {s.setNumber}
-                    </span>
-
-                    <label className="flex items-center justify-center gap-1">
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        max={1000}
-                        step="0.5"
-                        aria-label={`${currentExercise.name} Set ${s.setNumber} weight kg`}
-                        value={s.weightKg}
-                        onChange={(e) =>
-                          updateSetValues(safeExIndex, setIdx, {
-                            weightKg: e.target.value,
-                          })
-                        }
-                        className={`${ui.inputCompact} min-h-8 px-1.5 text-center font-semibold`}
-                      />
-                      <span className="text-[9px] text-ink-muted">kg</span>
-                    </label>
-
-                    <label className="flex items-center justify-center gap-1">
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={0}
-                        max={500}
-                        aria-label={`${currentExercise.name} Set ${s.setNumber} reps`}
-                        value={s.reps}
-                        onChange={(e) =>
-                          updateSetValues(safeExIndex, setIdx, {
-                            reps: e.target.value,
-                          })
-                        }
-                        className={`${ui.inputCompact} min-h-8 px-1.5 text-center font-semibold`}
-                      />
-                      <span className="text-[9px] text-ink-muted">reps</span>
-                    </label>
-
-                    <button
-                      type="button"
-                      onClick={() => completeOrToggleSet(safeExIndex, setIdx)}
-                      aria-pressed={s.completed}
-                      aria-label={`Mark Set ${s.setNumber} complete`}
-                      className={`grid size-9 place-items-center rounded-xl border transition-colors ${
-                        s.completed
-                          ? "border-accent bg-accent text-on-accent"
-                          : "border-line-strong bg-surface text-ink-muted hover:text-ink"
-                      }`}
-                    >
-                      <Check size={15} strokeWidth={2.5} aria-hidden="true" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {currentExercise.notes && (
-            <p className="rounded-xl border border-line bg-subtle px-3 py-2 text-[10px] text-ink-secondary">
-              Note: {currentExercise.notes}
-            </p>
           )}
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-dashed border-line-strong bg-surface p-6 text-center">
-          <p className="text-[13px] font-semibold text-ink">
-            Pick your first exercise to begin
-          </p>
-          <p className="mt-1 text-[11px] text-ink-secondary">
-            Tap below to select an exercise — your last weights and reps load automatically.
-          </p>
-          <button
-            type="button"
-            onClick={() => setIsAddExerciseOpen(true)}
-            className={`${ui.btnPrimary} mt-4 min-h-10 px-4 text-[11px]`}
-          >
-            <Plus size={14} aria-hidden="true" />
-            Choose Exercise
-          </button>
-        </div>
-      )}
 
-      {/* Dynamic Add / Remove Exercise Bar (First-class in Free Workout & all sessions) */}
-      {session.exercises.length > 0 && (
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setIsAddExerciseOpen(true)}
-            className={`${ui.btnSecondary} min-h-10 flex-1 px-3 text-[11px]`}
-          >
-            <Plus size={14} aria-hidden="true" />
-            Add Exercise
-          </button>
           {session.sourceType === "free_workout" &&
             currentExercise &&
             !currentExercise.sets.some((s) => s.completed) && (
-              <button
-                type="button"
-                onClick={removeCurrentExerciseFromSession}
-                className={`${ui.btnDangerOutline} min-h-10 px-3 text-[11px]`}
-              >
-                Remove Exercise
-              </button>
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={removeCurrentExerciseFromSession}
+                  className={`${ui.btnDangerOutline} min-h-9 px-3.5 text-[10px]`}
+                >
+                  Remove Exercise
+                </button>
+              </div>
             )}
         </div>
-      )}
-
-      {/* Secondary Bottom Session Controls */}
-      <div className="grid grid-cols-2 gap-2 pt-1">
-        <button
-          type="button"
-          onClick={() => setIsDiscardConfirmOpen(true)}
-          className={`${ui.btnSecondary} min-h-10 px-3 text-[11px]`}
-        >
-          End Without Saving
-        </button>
-        <button
-          type="button"
-          disabled={sessionTotals.completedSets < 1}
-          onClick={() => {
-            setPlayerError("");
-            setIsFinishModalOpen(true);
-          }}
-          className={`${ui.btnPrimary} min-h-10 px-3 text-[11px]`}
-        >
-          Finish Workout ({sessionTotals.completedSets})
-        </button>
       </div>
 
       {/* Add Exercise Mid-Session Sheet */}
@@ -2702,7 +2860,7 @@ export function ActiveWorkoutPlayer({
         </div>
       )}
 
-      {/* Discard Confirmation Modal (Prevents accidental workout loss) */}
+      {/* Exit / Pause / Discard Confirmation Modal (Prevents accidental workout loss) */}
       {isDiscardConfirmOpen && (
         <div
           className={ui.modalBackdrop}
@@ -2717,31 +2875,45 @@ export function ActiveWorkoutPlayer({
             className={`${ui.modalCard} max-w-[360px] p-5`}
           >
             <h3 id="discard-session-title" className="text-[15px] font-semibold text-ink">
-              Discard current workout?
+              Leave active workout?
             </h3>
             <p className="mt-1.5 text-[11px] leading-4 text-ink-secondary">
-              You can leave this screen anytime without losing progress — only discard if you want to cancel this session completely.
+              Your logged sets are saved automatically. You can pause and return to the app, or discard this session completely.
             </p>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setIsDiscardConfirmOpen(false)}
-                className={`${ui.btnSecondary} min-h-10 px-3 text-[11px]`}
-              >
-                Keep Workout
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  cancelRestVibration();
-                  void cancelBackgroundRestNotification();
-                  setIsDiscardConfirmOpen(false);
-                  onDiscardSession();
-                }}
-                className={`${ui.btnDangerSolid} min-h-10 px-3 text-[11px]`}
-              >
-                Discard Session
-              </button>
+            <div className="mt-4 space-y-2">
+              {onMinimizeWorkout && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDiscardConfirmOpen(false);
+                    onMinimizeWorkout();
+                  }}
+                  className={`${ui.btnPrimary} min-h-10 w-full px-3 text-[11px]`}
+                >
+                  Pause &amp; Return to App
+                </button>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDiscardConfirmOpen(false)}
+                  className={`${ui.btnSecondary} min-h-10 px-3 text-[11px]`}
+                >
+                  Keep Workout
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    cancelRestVibration();
+                    void cancelBackgroundRestNotification();
+                    setIsDiscardConfirmOpen(false);
+                    onDiscardSession();
+                  }}
+                  className={`${ui.btnDangerSolid} min-h-10 px-3 text-[11px]`}
+                >
+                  End Without Saving
+                </button>
+              </div>
             </div>
           </div>
         </div>

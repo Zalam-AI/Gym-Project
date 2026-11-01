@@ -322,6 +322,17 @@ export async function GET(request: NextRequest) {
             id: workoutDoc._id.toString(),
             title: workoutDoc.title,
             targetGoal: workoutDoc.targetGoal,
+            scheduledDays: Array.isArray(
+              (workoutDoc as unknown as { scheduledDays?: string[] }).scheduledDays,
+            )
+              ? (workoutDoc as unknown as { scheduledDays: string[] }).scheduledDays
+              : [],
+            createdByRole:
+              (workoutDoc as unknown as { createdByRole?: string }).createdByRole === "trainer"
+                ? "trainer"
+                : "staff",
+            createdByName:
+              (workoutDoc as unknown as { createdByName?: string }).createdByName ?? "",
             exercises: (
               workoutDoc.exercises as Array<{
                 exerciseName: string;
@@ -329,6 +340,8 @@ export async function GET(request: NextRequest) {
                 reps: string;
                 restTime: string;
                 targetMuscleGroup: string;
+                day?: string;
+                targetWeightKg?: number;
               }>
             ).map((exercise, index) => ({
               id: index + 1,
@@ -337,6 +350,8 @@ export async function GET(request: NextRequest) {
               reps: exercise.reps,
               rest: exercise.restTime,
               muscle: exercise.targetMuscleGroup,
+              day: exercise.day ?? "",
+              targetWeightKg: exercise.targetWeightKg ?? 0,
             })),
           }
         : null,
@@ -347,6 +362,11 @@ export async function GET(request: NextRequest) {
             targetGoal: pendingWorkoutDoc.targetGoal,
             assignedBy: rawPendingAssignedBy || gym.name,
             assignedAt: rawPendingAssignedAt ? new Date(rawPendingAssignedAt).toISOString() : null,
+            scheduledDays: Array.isArray(
+              (pendingWorkoutDoc as unknown as { scheduledDays?: string[] }).scheduledDays,
+            )
+              ? (pendingWorkoutDoc as unknown as { scheduledDays: string[] }).scheduledDays
+              : [],
             exercises: (
               pendingWorkoutDoc.exercises as Array<{
                 exerciseName: string;
@@ -354,6 +374,8 @@ export async function GET(request: NextRequest) {
                 reps: string;
                 restTime: string;
                 targetMuscleGroup: string;
+                day?: string;
+                targetWeightKg?: number;
               }>
             ).map((exercise, index) => ({
               id: index + 1,
@@ -362,6 +384,8 @@ export async function GET(request: NextRequest) {
               reps: exercise.reps,
               rest: exercise.restTime,
               muscle: exercise.targetMuscleGroup,
+              day: exercise.day ?? "",
+              targetWeightKg: exercise.targetWeightKg ?? 0,
             })),
           }
         : null,

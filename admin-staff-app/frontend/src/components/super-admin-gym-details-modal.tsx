@@ -480,7 +480,7 @@ export function SuperAdminGymDetailsModal({
                   </p>
                 ) : (
                   <div className="mt-3 overflow-x-auto">
-                    <table className="w-full text-left text-xs">
+                    <table className="w-full text-start text-xs">
                       <thead className="border-b border-slate-100 text-[10px] uppercase text-slate-400">
                         <tr>
                           <th className="py-2 pr-2">Receipt</th>

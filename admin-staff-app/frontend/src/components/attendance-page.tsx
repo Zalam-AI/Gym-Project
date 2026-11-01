@@ -630,7 +630,7 @@ export function AttendancePage() {
                       style={{ width: `${period.value}%` }}
                     />
                   </span>
-                  <span className="text-right text-[10px] font-medium text-[#74808e]">
+                  <span className="text-end text-[10px] font-medium text-[#74808e]">
                     {period.value}%
                   </span>
                 </li>
@@ -659,7 +659,7 @@ export function AttendancePage() {
           </div>
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] border-collapse text-left">
+              <table className="w-full min-w-[820px] border-collapse text-start">
                 <caption className="sr-only">Today&apos;s gym check-in log</caption>
                 <thead>
                   <tr className="bg-[#fafbfc]">

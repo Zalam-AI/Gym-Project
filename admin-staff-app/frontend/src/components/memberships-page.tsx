@@ -665,7 +665,7 @@ export function MembershipsPage() {
           </div>
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[940px] border-collapse text-left">
+              <table className="w-full min-w-[940px] border-collapse text-start">
                 <caption className="sr-only">Member subscriptions, plan dates, payment status, and renewal actions</caption>
                 <thead>
                   <tr className="bg-[#fafbfc]">

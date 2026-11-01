@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Globe } from "lucide-react";
+import { ARABIC_EXERCISE_DICTIONARY } from "@/lib/exercise-media";
 
 export type MobileLanguage = "en" | "ar";
 
@@ -580,7 +581,7 @@ const EXACT_AR: Record<string, string> = {
   "Preference saved · Device limits browser vibration":
     "تم حفظ التفضيل · الجهاز يقيّد اهتزاز المتصفح",
   "On": "مفعّل",
-  "Off": "ميقف",
+  "Off": "متوقف",
   "Rest notifications": "إشعارات انتهاء الراحة",
   "Local notifications unavailable in this browser":
     "الإشعارات المحلية غير متاحة في هذا المتصفح",
@@ -941,6 +942,119 @@ const EXACT_AR: Record<string, string> = {
   "Overhead Tricep Extension": "مد الترايسبس خلف الرأس",
   Plank: "بلانك",
   "Hanging Leg Raise": "رفع الأرجل معلقاً",
+
+  // Complete Egyptian Gym Arabic Exercise Dictionary (all 27 canonical exercises + aliases)
+  ...ARABIC_EXERCISE_DICTIONARY,
+
+  // Focused Full-Screen Workout Mode & Wheel Pickers
+  "1. Setup": "1. الإعداد",
+  "2. Demo": "2. الشرح",
+  "3. Track Sets": "3. المجموعات",
+  "4. Rate": "4. التقييم",
+  Setup: "الإعداد",
+  Track: "المجموعات",
+  Rate: "التقييم",
+  "Exercise Setup": "إعداد التمرين",
+  "Roll to pick your starting weight, reps, and sets":
+    "مرّر لاختيار الوزن المبدئي والتكرارات وعدد المجموعات",
+  "See Demo": "عرض الشرح",
+  "Swipe left or tap See Demo": "اسحب أو اضغط عرض الشرح للمتابعة",
+  "Swipe right or tap See Demo": "اسحب أو اضغط عرض الشرح للمتابعة",
+  "Exercise Demonstration": "طريقة أداء التمرين",
+  "Start Sets": "بدء المجموعات",
+  "Swipe left or tap Start Sets": "اسحب أو اضغط بدء المجموعات",
+  "Swipe right or tap Start Sets": "اسحب أو اضغط بدء المجموعات",
+  Resting: "استراحة",
+  "Adjust actual weight or reps if needed, then tap Complete Set":
+    "عدّل الوزن أو التكرارات الفعلية عند الحاجة ثم اضغط إتمام المجموعة",
+  "Complete Set": "إتمام المجموعة",
+  "Swipe left or tap Complete Set": "اسحب أو اضغط إتمام المجموعة",
+  "Swipe right or tap Complete Set": "اسحب أو اضغط إتمام المجموعة",
+  "Exercise Complete!": "اكتمل التمرين!",
+  "How hard was this exercise? (1–10)": "ما مدى صعوبة التمرين؟ (1–10)",
+  "Quick tap to personalize next session's weight & reps":
+    "اختر تقييماً سريعاً لضبط وزن وتكرارات الجلسة القادمة",
+  "Next-Session Suggestion": "اقتراح الجلسة القادمة",
+  "Keep Current": "الإبقاء على الحالي",
+  "Finish Workout": "إنهاء التمرين",
+  "Exit active workout?": "الخروج من التمرين النشط؟",
+  "Your completed sets are auto-saved. You can pause and return anytime, or discard this session.":
+    "تم حفظ مجموعاتك المكتملة تلقائياً. يمكنك الإيقاف المؤقت والعودة لاحقاً أو إلغاء الجلسة.",
+  "Pause & Return to App": "إيقاف مؤقت والعودة للتطبيق",
+  "Discard Without Saving": "إلغاء دون حفظ",
+  "Workout in Progress": "تمرين قيد التنفيذ",
+  "Your focused workout is paused and auto-saved.":
+    "تم إيقاف تمرينك مؤقتاً وحفظ تقدمك تلقائياً.",
+  "Workout Complete!": "اكتملت جلسة التمرين!",
+  "Every set, weight, and rep is saved to your history.":
+    "تم حفظ كل مجموعة ووزن وتكرار في سجل تمارينك.",
+  "Logged Exercises": "التمارين المسجلة",
+  "Done · Back to Workouts": "تم · العودة للتمارين",
+  "Exit workout": "الخروج من التمرين",
+  "Previous exercise": "التمرين السابق",
+  "Next exercise": "التمرين التالي",
+  "Skip rest": "تخطي الراحة",
+
+  // Trainer Mobile Routine Builder & Freedom
+  Routines: "البرامج",
+  "Coach Routines": "برامج المدرب",
+  "Workout routines": "البرامج التدريبية",
+  "Create custom routines for your trainees or reuse gym templates.":
+    "صمّم برامج مخصصة لمتدربيك أو أعد استخدام قوالب النادي.",
+  "Create Routine": "إنشاء برنامج",
+  "Edit Coach Routine": "تعديل برنامج المدرب",
+  "Create Coach Routine": "إنشاء برنامج تدريبي",
+  "My Routine": "برنامجي",
+  "Coach Routine": "برنامج المدرب",
+  "Gym Template": "قالب النادي",
+  "Customize Copy": "تخصيص نسخة",
+  Duplicate: "نسخ القالب",
+  "Assign to trainee…": "تعيين لمتدرب…",
+  "Assign to trainee": "تعيين لمتدرب",
+  "Save as reusable template only": "حفظ كقالب قابل لإعادة الاستخدام فقط",
+  "Routine title": "اسم البرنامج",
+  "Target goal": "الهدف التدريبي",
+  "Training days": "أيام التمرين",
+  "Quick-add from Exercise Library": "إضافة سريعة من مكتبة التمارين",
+  "Search exercise library...": "ابحث في مكتبة التمارين...",
+  "Reorder with arrows and set sets, reps, suggested weight (kg), and day.":
+    "رتّب التمارين بالأسهم وحدد المجموعات والتكرارات والوزن المقترح (كجم) واليوم.",
+  "All days": "كل الأيام",
+  "Move up": "تحريك للأعلى",
+  "Move down": "تحريك للأسفل",
+  "Delete routine": "حذف البرنامج",
+  "No workout routines yet. Tap New Routine to build your first template.":
+    "لا توجد برامج تدريبية بعد. اضغط برنامج جديد لإنشاء أول قالب.",
+  "Routine saved.": "تم حفظ البرنامج التدريبي.",
+  "Routine duplicated to your templates.": "تم نسخ البرنامج إلى قوالبك الخاصة.",
+  "Routine deleted.": "تم حذف البرنامج التدريبي.",
+
+  // New Member Interactive Tutorial
+  "Step 1 of 5": "الخطوة 1 من 5",
+  "Step 2 of 5": "الخطوة 2 من 5",
+  "Step 3 of 5": "الخطوة 3 من 5",
+  "Step 4 of 5": "الخطوة 4 من 5",
+  "Step 5 of 5": "الخطوة 5 من 5",
+  "Home & Today's Workout": "الرئيسية وتمرين اليوم",
+  "See today's scheduled training, resume an active session, or launch a Free Workout in one tap.":
+    "شاهد تمرينك المجدول لليوم أو استأنف جلستك النشطة أو ابدأ تمريناً حراً بضغطة واحدة.",
+  "Digital Pass & QR Check-In": "بطاقة العضوية ومسح رمز الحضور",
+  "Check your active plan and scan the gym reception QR code whenever you arrive to log your visit.":
+    "تأكد من باقتك النشطة وامسح رمز QR في استقبال النادي عند وصولك لتسجيل زيارتك.",
+  "Routines & Exercise Library": "البرامج ومكتبة التمارين",
+  "Create personal weekly routines, explore exercise form demos, and track sets in full-screen workout mode.":
+    "أنشئ جدولك الأسبوعي الخاص وتصفح شرح التمارين وسجّل مجموعاتك في وضع التمرين الكامل.",
+  "Progress & Workout History": "التقدم وسجل التمارين",
+  "Every completed set, actual weight, personal record, and training streak is saved here automatically.":
+    "يُحفظ هنا تلقائياً كل وزن فعلي ومجموعة مكتملة ورقم قياسي وسلسلة التزام.",
+  "Profile, Language & Settings": "حسابي واللغة والإعدادات",
+  "Switch between English and العربية anytime in the top bar, customize rest timers, or replay this guide.":
+    "بدّل بين الإنجليزية والعربية في أي وقت من الشريط العلوي، واضبط مؤقت الراحة أو أعد تشغيل هذا الدليل.",
+  Next: "التالي",
+  "Get Started": "ابدأ الآن",
+  "Previous step": "الخطوة السابقة",
+  "Member app quick guide": "دليل استخدام تطبيق الأعضاء",
+  "Replay App Tutorial": "إعادة عرض دليل التطبيق",
 };
 
 const EN_MONTHS: Record<string, string> = {
@@ -1279,6 +1393,31 @@ const AR_PATTERNS: Array<[RegExp, (...args: string[]) => string]> = [
     (_, m, dt) => `${EXACT_AR[m] ?? m} · ${translateDatesAndCurrency(dt.trim())}`,
   ],
   [/^Achieved\s+(.+)$/i, (_, dt) => `تحقق في ${translateDatesAndCurrency(dt)}`],
+  [/^(\d+)\.\s*(.+)$/, (_, n, ex) => `${n}. ${EXACT_AR[ex.trim()] ?? ex.trim()}`],
+  [
+    /^Last session:\s*([\d.]+)\s*kg\s*×\s*(\d+)\s*reps$/i,
+    (_, w, r) => `الجلسة السابقة: ${w} كجم × ${r} تكرار`,
+  ],
+  [
+    /^Last session:\s*(\d+)\s*reps$/i,
+    (_, r) => `الجلسة السابقة: ${r} تكرار`,
+  ],
+  [
+    /^Set\s+(\d+)\s+of\s+(\d+)$/i,
+    (_, a, b) => `المجموعة ${a} من ${b}`,
+  ],
+  [
+    /^Coach\s*[·•]\s*(.+)$/i,
+    (_, name) => `المدرب · ${name}`,
+  ],
+  [
+    /^Routine saved and sent to\s+(.+)\.$/i,
+    (_, name) => `تم حفظ البرنامج وإرساله إلى ${name}.`,
+  ],
+  [
+    /^(.+)\s*—\s*tap to continue$/i,
+    (_, title) => `${EXACT_AR[title.trim()] ?? title.trim()} — اضغط للمتابعة`,
+  ],
   [/^of$/i, () => "من"],
   [/^with$/i, () => "مع"],
 ];
