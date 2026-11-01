@@ -15,7 +15,12 @@ const repoRoot = path.resolve(__dirname, "../../..");
 const frontendDir = path.join(repoRoot, "admin-staff-app/frontend");
 loadEnvConfig(frontendDir);
 
-const mongodBin = "/home/user/.cache/mongo-bin/mongod-x64-debian-7.0.14";
+const mongodBin =
+  [
+    "/home/user/.cache/mongo-bin/mongod-x64-debian-7.0.14",
+    "/usr/bin/mongod",
+    "/usr/local/bin/mongod",
+  ].find((candidate) => fs.existsSync(candidate)) ?? "/usr/bin/mongod";
 const nextBin = path.join(repoRoot, "node_modules/.bin/next");
 
 const TEST_MONGO_PORT = 27092;
@@ -103,6 +108,9 @@ function sendHttp(options: {
       },
     );
 
+    req.setTimeout(15_000, () => {
+      req.destroy(new Error(`HTTP timeout on ${method} ${options.path}`));
+    });
     req.on("error", reject);
     if (payload !== undefined) req.write(payload);
     req.end();
@@ -188,15 +196,20 @@ before(async () => {
       GYMOS_STAFF_APP_ORIGINS: "https://gymos.com,https://app.gymos.com",
       GYMOS_MEMBER_APP_ORIGINS: "https://localhost,http://localhost",
     },
-    stdio: "pipe",
+    detached: true,
+    stdio: "ignore",
   });
 
   await waitForHealth();
 });
 
 after(async () => {
-  if (nextProc && !nextProc.killed) {
-    nextProc.kill("SIGTERM");
+  if (nextProc && nextProc.pid) {
+    try {
+      process.kill(-nextProc.pid, "SIGTERM");
+    } catch {
+      nextProc.kill("SIGTERM");
+    }
     await new Promise((r) => setTimeout(r, 400));
   }
   if (mongodProc && !mongodProc.killed) {
@@ -618,4 +631,209 @@ test("5. Support management & immutable administrative audit log verification", 
       `Expected audit log to contain ${expectedAction}, got: ${[...recordedActions].join(", ")}`,
     );
   }
+});
+
+test("6. Leeloo Connect `/` Super Admin root, `/gym/<slug>` routing, SaaS Plans & Limit Enforcement, Manual Payments, and Expiration/Grace Enforcement", async () => {
+  // 1. `/` serves Super Admin Dashboard ONLY for Platform Admins (Gym Owner is redirected to /platform/login)
+  const rootUnauth = await sendHttp({ path: "/" });
+  assert.ok(rootUnauth.status === 307 || rootUnauth.status === 302);
+  assert.ok(String(rootUnauth.headers.location).includes("/platform/login"));
+
+  const rootGymOwner = await sendHttp({ path: "/", cookie: gymOwnerCookie });
+  assert.ok(rootGymOwner.status === 307 || rootGymOwner.status === 302);
+  assert.ok(String(rootGymOwner.headers.location).includes("/platform/login"));
+
+  const rootSuperAdmin = await sendHttp({ path: "/", cookie: platformOwnerCookie });
+  assert.equal(rootSuperAdmin.status, 200);
+
+  // 2. SaaS Plans & Pricing CRUD: create a custom plan with maxMembers = 1, maxStaff = 2
+  const plansGet = await sendHttp({ path: "/api/platform/plans", cookie: platformOwnerCookie });
+  assert.equal(plansGet.status, 200);
+  assert.ok(Array.isArray(plansGet.json?.plans) && (plansGet.json?.plans as unknown[]).length >= 4);
+
+  const customPlanRes = await sendHttp({
+    method: "POST",
+    path: "/api/platform/plans",
+    cookie: platformOwnerCookie,
+    body: {
+      action: "create-plan",
+      code: "micro-boutique",
+      name: "Micro Boutique Studio",
+      tier: "starter",
+      monthlyPrice: 950,
+      annualPrice: 9500,
+      features: ["Up to 1 active member in test", "QR attendance"],
+      limits: {
+        maxMembers: 1,
+        maxStaff: 2,
+        maxTrainers: 1,
+      },
+    },
+  });
+  assert.equal(customPlanRes.status, 201, customPlanRes.text);
+
+  // 3. Provision a new gym `/gym/powerfitness` on `micro-boutique` plan
+  const createPower = await sendHttp({
+    method: "POST",
+    path: "/api/platform/gyms",
+    cookie: platformOwnerCookie,
+    body: {
+      action: "create-gym",
+      name: "Power Fitness",
+      slug: "powerfitness",
+      address: "Zamalek, Cairo",
+      phone: "+201009998877",
+      capacity: 60,
+      timezone: "Africa/Cairo",
+      status: "active",
+      planCode: "micro-boutique",
+      gracePeriodDays: 5,
+      ownerName: "Nadia Power",
+      ownerEmail: "nadia@powerfitness.eg",
+      ownerPassword: "PowerOwnerPass123!",
+    },
+  });
+  assert.equal(createPower.status, 201, createPower.text);
+  const powerGym = createPower.json?.gym as Record<string, unknown>;
+  const powerGymId = String(powerGym.id);
+  assert.equal(powerGym.slug, "powerfitness");
+  assert.equal(powerGym.workspacePath, "/gym/powerfitness");
+
+  // Individual Gym Details view returns gym info, limits, staff, and `/gym/powerfitness` path
+  const detailRes = await sendHttp({
+    path: `/api/platform/gyms?gymId=${powerGymId}`,
+    cookie: platformOwnerCookie,
+  });
+  assert.equal(detailRes.status, 200, detailRes.text);
+  const detailObj = detailRes.json?.gym as Record<string, unknown>;
+  assert.equal(detailObj.slug, "powerfitness");
+  assert.equal(detailObj.workspacePath, "/gym/powerfitness");
+
+  // 4. Sign in to `/gym/powerfitness` as Nadia Power and verify `/gym/powerfitness` workspace loads 200
+  const powerLogin = await sendHttp({
+    method: "POST",
+    path: "/api/auth/login",
+    body: {
+      email: "nadia@powerfitness.eg",
+      password: "PowerOwnerPass123!",
+      gymSlug: "powerfitness",
+    },
+  });
+  assert.equal(powerLogin.status, 200, powerLogin.text);
+  const powerCookie = extractCookiePair(powerLogin.headers, "gymos_staff_session");
+
+  const powerWorkspaceHtml = await sendHttp({
+    path: "/gym/powerfitness",
+    cookie: powerCookie,
+  });
+  assert.equal(powerWorkspaceHtml.status, 200);
+
+  // Visiting Iron Club's `/gym/iron-club/members` with Power Fitness cookie is blocked and redirected to `/gym/iron-club/login`
+  const crossSlugHtml = await sendHttp({
+    path: "/gym/iron-club/members",
+    cookie: powerCookie,
+  });
+  assert.ok(crossSlugHtml.status === 307 || crossSlugHtml.status === 302);
+  assert.ok(String(crossSlugHtml.headers.location).includes("/gym/iron-club/login"));
+
+  // 5. Enforce Backend SaaS Plan Limit (`maxMembers: 1` on `micro-boutique`)
+  const m1 = await sendHttp({
+    method: "POST",
+    path: "/api/members",
+    cookie: powerCookie,
+    body: {
+      fullName: "First Allowed Member",
+      phone: "01055550001",
+      plan: "Monthly",
+      price: 1200,
+      duration: 1,
+      paymentMethod: "Cash",
+      paymentStatus: "Paid",
+    },
+  });
+  assert.equal(m1.status, 201, m1.text);
+
+  const m2Blocked = await sendHttp({
+    method: "POST",
+    path: "/api/members",
+    cookie: powerCookie,
+    body: {
+      fullName: "Second Over-Limit Member",
+      phone: "01055550002",
+      plan: "Monthly",
+      price: 1200,
+      duration: 1,
+      paymentMethod: "Cash",
+      paymentStatus: "Paid",
+    },
+  });
+  assert.equal(m2Blocked.status, 403, `Expected 403 plan limit block, got: ${m2Blocked.text}`);
+  assert.match(String(m2Blocked.json?.error), /Plan limit reached/i);
+
+  // 6. Expired subscription + elapsed grace period blocks gym access (403), then Manual Payment renews & restores access!
+  const expireSub = await sendHttp({
+    method: "POST",
+    path: "/api/platform/gyms",
+    cookie: platformOwnerCookie,
+    body: {
+      action: "update-subscription",
+      gymId: powerGymId,
+      planCode: "micro-boutique",
+      billingStatus: "past_due",
+      paymentStatus: "overdue",
+      expirationDate: "2025-01-01",
+      gracePeriodDays: 3,
+      autoSuspendOnExpire: true,
+    },
+  });
+  assert.equal(expireSub.status, 200, expireSub.text);
+
+  const blockedWhenExpired = await sendHttp({
+    path: "/api/dashboard",
+    cookie: powerCookie,
+  });
+  assert.equal(blockedWhenExpired.status, 403);
+  assert.match(String(blockedWhenExpired.json?.error), /expired/i);
+
+  // Record a manual SaaS payment & upgrade/renew Power Fitness onto `growth` plan -> access immediately restored!
+  const manualPay = await sendHttp({
+    method: "POST",
+    path: "/api/platform/payments",
+    cookie: platformOwnerCookie,
+    body: {
+      gymId: powerGymId,
+      planCode: "growth",
+      amount: 3800,
+      billingCycle: "monthly",
+      paymentMethod: "Bank Transfer",
+      paymentStatus: "paid",
+      extendSubscription: true,
+      periodEnd: "2027-12-31",
+      referenceNote: "CIB Manual Transfer #77881",
+    },
+  });
+  assert.equal(manualPay.status, 201, manualPay.text);
+
+  const restoredDash = await sendHttp({
+    path: "/api/dashboard",
+    cookie: powerCookie,
+  });
+  assert.equal(restoredDash.status, 200, restoredDash.text);
+
+  // Now on `growth` plan (maxMembers: 600), adding the 2nd member succeeds!
+  const m2Allowed = await sendHttp({
+    method: "POST",
+    path: "/api/members",
+    cookie: powerCookie,
+    body: {
+      fullName: "Second Upgraded Member",
+      phone: "01055550002",
+      plan: "Monthly",
+      price: 1200,
+      duration: 1,
+      paymentMethod: "Cash",
+      paymentStatus: "Paid",
+    },
+  });
+  assert.equal(m2Allowed.status, 201, m2Allowed.text);
 });

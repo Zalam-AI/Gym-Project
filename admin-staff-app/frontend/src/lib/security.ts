@@ -1,5 +1,8 @@
 export function isPreviewModeEnabled(): boolean {
-  return process.env.GYMOS_ALLOW_PREVIEW_ORIGINS === "1";
+  const val =
+    globalThis.process?.env?.["GYMOS_ALLOW_PREVIEW_ORIGINS"] ??
+    process.env.GYMOS_ALLOW_PREVIEW_ORIGINS;
+  return val === "1";
 }
 
 function parseConfiguredOrigins(raw: string | undefined): string[] {
@@ -11,9 +14,18 @@ function parseConfiguredOrigins(raw: string | undefined): string[] {
 }
 
 export function getAllowedOriginsSet(): Set<string> {
+  const staffRaw =
+    globalThis.process?.env?.["GYMOS_STAFF_APP_ORIGINS"] ||
+    process.env.GYMOS_STAFF_APP_ORIGINS;
+  const memberRaw =
+    globalThis.process?.env?.["GYMOS_MEMBER_APP_ORIGINS"] ||
+    process.env.GYMOS_MEMBER_APP_ORIGINS;
   const origins = new Set<string>([
-    ...parseConfiguredOrigins(process.env.GYMOS_STAFF_APP_ORIGINS),
-    ...parseConfiguredOrigins(process.env.GYMOS_MEMBER_APP_ORIGINS),
+    "https://localhost",
+    "capacitor://localhost",
+    "http://localhost",
+    ...parseConfiguredOrigins(staffRaw),
+    ...parseConfiguredOrigins(memberRaw),
   ]);
 
   if (process.env.NODE_ENV !== "production" || isPreviewModeEnabled()) {

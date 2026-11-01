@@ -57,10 +57,10 @@ export function PlatformLoginPage() {
       if (data.sessionToken) {
         setPlatformSessionToken(data.sessionToken);
       }
-      router.replace("/platform");
+      router.replace("/");
       router.refresh();
     } catch {
-      setError("Network error while contacting the GymOS Platform Console.");
+      setError("Network error while contacting the Leeloo Connect Super Admin Console.");
     } finally {
       setPending(false);
     }
@@ -95,10 +95,10 @@ export function PlatformLoginPage() {
           </span>
           <div>
             <p className="text-lg font-semibold tracking-[-0.02em] text-white">
-              GymOS <span className="text-indigo-400">Control Plane</span>
+              Leeloo <span className="text-indigo-400">Connect</span>
             </p>
             <p className="text-[11px] font-medium text-slate-400">
-              Platform Owner &amp; Governance Console
+              Super Admin Dashboard &amp; Multi-Gym Control Plane
             </p>
           </div>
         </div>
@@ -107,14 +107,14 @@ export function PlatformLoginPage() {
           <div className="mb-5">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-300">
               <Lock size={11} aria-hidden="true" />
-              Restricted Access
+              Super Admin Only
             </span>
             <h1 className="mt-3 text-[22px] font-semibold tracking-[-0.02em] text-white">
-              Platform Administrator Sign In
+              Super Admin Sign In
             </h1>
             <p className="mt-1 text-[12px] leading-5 text-slate-400">
-              Exclusively for authorized GymOS platform administrators. Individual gym owners and
-              staff do not have access to this console.
+              Exclusively for authorized Leeloo Connect platform owners. Individual gym admins and
+              staff sign in through their dedicated <span className="font-mono text-slate-300">/gym/&lt;slug&gt;</span> workspace.
             </p>
           </div>
 
@@ -173,6 +173,10 @@ export function PlatformLoginPage() {
 
         <p className="mt-5 text-center text-[11px] text-slate-500">
           All sign-in events and administrative mutations are recorded in the platform audit log.
+          {" "}Looking for a club workspace?{" "}
+          <a href="/login" className="font-medium text-indigo-400 hover:text-indigo-300">
+            Gym Staff Sign In
+          </a>
         </p>
       </div>
     </main>

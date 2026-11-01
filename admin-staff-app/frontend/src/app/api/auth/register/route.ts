@@ -7,6 +7,11 @@ import {
   subdomainifyGymName,
 } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase, runInTransactionOrFallback } from "gymos-admin-backend/lib/mongodb";
+import {
+  computeSubscriptionState,
+  enforceGymPlanLimit,
+  type RawPlatformSubscription,
+} from "gymos-admin-backend/lib/saas-enforcement";
 import { hashStaffPassword } from "gymos-admin-backend/lib/staff-password";
 import { normalizeStaffInviteCode } from "gymos-admin-backend/lib/trainer-code";
 import GymModel from "gymos-admin-backend/models/gym";
@@ -168,13 +173,14 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
-    if (tenant.mode === "tenant" && tenant.gym.status !== "active") {
+    if (tenant.mode === "tenant" && !tenant.gym.accessAllowed) {
       return NextResponse.json(
         {
           error:
-            tenant.gym.status === "pending"
+            tenant.gym.accessDeniedReason ??
+            (tenant.gym.status === "pending"
               ? "This gym workspace is awaiting platform administrator approval."
-              : "This gym workspace is currently suspended.",
+              : "This gym workspace is currently suspended."),
         },
         { status: 403 },
       );
@@ -305,10 +311,16 @@ export async function POST(request: Request) {
                 logoText,
               },
               platformSubscription: {
+                planCode: "trial",
+                planName: "Free Trial",
                 planTier: "trial",
                 billingStatus: "trialing",
+                paymentStatus: "trialing",
                 billingCycle: "monthly",
+                startDate: new Date(),
+                expirationDate: trialEndDate,
                 renewalDate: trialEndDate,
+                gracePeriodDays: 3,
                 notes: "Self-service trial onboarding",
               },
               address: gymAddress,
@@ -483,7 +495,7 @@ export async function POST(request: Request) {
       const gym = await GymModel.findOne({
         _id: claimedInvite.gymId,
         status: "active",
-      }).select("name slug subdomain");
+      }).select("name slug subdomain currency status platformSubscription");
 
       if (!gym) {
         await rollbackInvite();
@@ -491,6 +503,24 @@ export async function POST(request: Request) {
           { error: "The gym workspace for this invite code is unavailable." },
           { status: 404 },
         );
+      }
+
+      const subState = computeSubscriptionState(
+        gym.platformSubscription as RawPlatformSubscription,
+        { gymStatus: gym.status, gymCurrency: gym.currency },
+      );
+      if (!subState.accessAllowed) {
+        await rollbackInvite();
+        return NextResponse.json(
+          { error: subState.accessDeniedReason ?? "This gym workspace is currently unavailable." },
+          { status: 403 },
+        );
+      }
+
+      const staffLimit = await enforceGymPlanLimit(gym._id, "staff");
+      if (!staffLimit.allowed) {
+        await rollbackInvite();
+        return NextResponse.json({ error: staffLimit.error }, { status: 403 });
       }
 
       try {

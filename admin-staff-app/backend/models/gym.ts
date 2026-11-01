@@ -18,6 +18,26 @@ export type PlatformBillingStatus = (typeof PLATFORM_BILLING_STATUSES)[number];
 export const PLATFORM_BILLING_CYCLES = ["monthly", "annual", "custom"] as const;
 export type PlatformBillingCycle = (typeof PLATFORM_BILLING_CYCLES)[number];
 
+export const PLATFORM_PAYMENT_STATUSES = [
+  "trialing",
+  "paid",
+  "pending",
+  "past_due",
+  "grace_period",
+  "expired",
+  "waived",
+] as const;
+export type PlatformPaymentStatus = (typeof PLATFORM_PAYMENT_STATUSES)[number];
+
+const gymLimitsOverrideSchema = new Schema(
+  {
+    maxMembers: { type: Number, min: 1, max: 1_000_000, default: null },
+    maxStaff: { type: Number, min: 1, max: 10_000, default: null },
+    maxTrainers: { type: Number, min: 1, max: 10_000, default: null },
+  },
+  { _id: false },
+);
+
 const gymBrandingSchema = new Schema(
   {
     accentColor: {
@@ -45,6 +65,24 @@ const gymBrandingSchema = new Schema(
 
 const platformSubscriptionSchema = new Schema(
   {
+    planId: {
+      type: Schema.Types.ObjectId,
+      ref: "SaasPlan",
+      default: null,
+    },
+    planCode: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      maxlength: 48,
+      default: "",
+    },
+    planName: {
+      type: String,
+      trim: true,
+      maxlength: 80,
+      default: "",
+    },
     planTier: {
       type: String,
       enum: PLATFORM_PLAN_TIERS,
@@ -57,13 +95,40 @@ const platformSubscriptionSchema = new Schema(
       default: "trialing",
       required: true,
     },
+    paymentStatus: {
+      type: String,
+      enum: PLATFORM_PAYMENT_STATUSES,
+      default: "trialing",
+    },
     billingCycle: {
       type: String,
       enum: PLATFORM_BILLING_CYCLES,
       default: "monthly",
       required: true,
     },
-    renewalDate: { type: Date },
+    priceAmount: {
+      type: Number,
+      min: 0,
+      max: 100_000_000,
+      default: null,
+    },
+    startDate: { type: Date, default: null },
+    expirationDate: { type: Date, default: null },
+    renewalDate: { type: Date, default: null },
+    gracePeriodDays: {
+      type: Number,
+      min: 0,
+      max: 90,
+      default: 7,
+    },
+    autoSuspendOnExpire: {
+      type: Boolean,
+      default: true,
+    },
+    limitsOverride: {
+      type: gymLimitsOverrideSchema,
+      default: () => ({ maxMembers: null, maxStaff: null, maxTrainers: null }),
+    },
     notes: {
       type: String,
       trim: true,

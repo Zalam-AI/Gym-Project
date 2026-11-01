@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { subdomainifyGymName } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import {
+  computeSubscriptionState,
+  type RawPlatformSubscription,
+} from "gymos-admin-backend/lib/saas-enforcement";
 import GymModel from "gymos-admin-backend/models/gym";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
 import { getMemberTokenFromRequest, verifyMemberSessionToken } from "@/lib/member-session";
@@ -85,7 +89,7 @@ async function evaluateStaffRequest(
         status: "active",
       }).select("fullName email role status"),
       GymModel.findById(gymId).select(
-        "name slug subdomain customDomain branding address phone capacity timezone currency status",
+        "name slug subdomain customDomain branding address phone capacity timezone currency status platformSubscription",
       ),
     ]);
 
@@ -93,13 +97,19 @@ async function evaluateStaffRequest(
       return { status: "unauthenticated", error: "Authentication required." };
     }
 
-    if (gym.status !== "active") {
+    const subState = computeSubscriptionState(
+      gym.platformSubscription as RawPlatformSubscription,
+      {
+        gymStatus: gym.status,
+        gymCurrency: gym.currency,
+      },
+    );
+    if (!subState.accessAllowed) {
       return {
         status: "forbidden",
         error:
-          gym.status === "pending"
-            ? "This gym workspace is awaiting platform administrator approval."
-            : "This gym workspace is currently suspended.",
+          subState.accessDeniedReason ??
+          "This gym workspace is currently unavailable.",
       };
     }
 
@@ -121,7 +131,11 @@ async function evaluateStaffRequest(
       };
     }
 
-    const authorizedGym = { id: gym._id.toString(), slug: gym.slug };
+    const subdomain =
+      typeof gym.subdomain === "string" && gym.subdomain.trim()
+        ? gym.subdomain.trim().toLowerCase()
+        : subdomainifyGymName(gym.name);
+    const authorizedGym = { id: gym._id.toString(), slug: gym.slug, subdomain };
     if (hasConflictingGymRef(request, authorizedGym, body)) {
       return {
         status: "forbidden",
@@ -130,10 +144,6 @@ async function evaluateStaffRequest(
     }
 
     const role: StaffRole = user.role === "owner" ? "owner" : "staff";
-    const subdomain =
-      typeof gym.subdomain === "string" && gym.subdomain.trim()
-        ? gym.subdomain.trim().toLowerCase()
-        : subdomainifyGymName(gym.name);
     const customDomain =
       typeof gym.customDomain === "string" && gym.customDomain.trim()
         ? gym.customDomain.trim().toLowerCase()

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { subdomainifyGymName } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import {
+  computeSubscriptionState,
+  type RawPlatformSubscription,
+} from "gymos-admin-backend/lib/saas-enforcement";
 import { hashStaffPassword, verifyStaffPassword } from "gymos-admin-backend/lib/staff-password";
 import GymModel from "gymos-admin-backend/models/gym";
 import StaffUserModel from "gymos-admin-backend/models/staff-user";
@@ -70,13 +74,14 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
-    if (tenant.mode === "tenant" && tenant.gym.status !== "active") {
+    if (tenant.mode === "tenant" && !tenant.gym.accessAllowed) {
       return NextResponse.json(
         {
           error:
-            tenant.gym.status === "pending"
+            tenant.gym.accessDeniedReason ??
+            (tenant.gym.status === "pending"
               ? "This gym workspace is awaiting platform administrator approval."
-              : "This gym workspace is currently suspended.",
+              : "This gym workspace is currently suspended."),
         },
         { status: 403 },
       );
@@ -98,18 +103,26 @@ export async function POST(request: Request) {
     }
 
     const gym = await GymModel.findById(user.gymId).select(
-      "name slug subdomain customDomain branding status",
+      "name slug subdomain customDomain branding status currency platformSubscription",
     );
     if (!gym) {
       return NextResponse.json({ error: "Assigned gym workspace was not found." }, { status: 404 });
     }
-    if (gym.status !== "active") {
+    const subState = computeSubscriptionState(
+      gym.platformSubscription as RawPlatformSubscription,
+      {
+        gymStatus: gym.status,
+        gymCurrency: gym.currency,
+      },
+    );
+    if (!subState.accessAllowed) {
       return NextResponse.json(
         {
           error:
-            gym.status === "pending"
+            subState.accessDeniedReason ??
+            (gym.status === "pending"
               ? "This gym workspace is awaiting platform administrator approval."
-              : "This gym workspace is currently suspended.",
+              : "This gym workspace is currently suspended."),
         },
         { status: 403 },
       );
@@ -161,6 +174,7 @@ export async function POST(request: Request) {
         id: gym._id.toString(),
         name: gym.name,
         slug: gym.slug,
+        workspacePath: `/gym/${gym.slug}`,
         subdomain,
         customDomain,
         branding: {

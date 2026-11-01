@@ -65,6 +65,38 @@ export async function POST(request: Request) {
 
   try {
     await connectToDatabase();
+
+    // Secure environment-variable bootstrap when zero PlatformAdmin accounts exist yet
+    const existingAdminCount = await PlatformAdminModel.countDocuments({});
+    if (existingAdminCount === 0) {
+      const bootstrapEmail = (
+        process.env.GYMOS_PLATFORM_ADMIN_EMAIL ||
+        process.env.SUPER_ADMIN_EMAIL ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+      const bootstrapPassword =
+        process.env.GYMOS_PLATFORM_ADMIN_PASSWORD || process.env.SUPER_ADMIN_PASSWORD || "";
+      if (bootstrapEmail && bootstrapPassword.length >= 10) {
+        const bootstrapHash = await hashStaffPassword(bootstrapPassword);
+        await PlatformAdminModel.findOneAndUpdate(
+          { email: bootstrapEmail },
+          {
+            $setOnInsert: {
+              fullName: "Leeloo Connect Super Admin",
+              email: bootstrapEmail,
+              passwordHash: bootstrapHash,
+              role: "platform_owner",
+              permissions: [...PLATFORM_PERMISSIONS],
+              status: "active",
+            },
+          },
+          { upsert: true, runValidators: true },
+        );
+      }
+    }
+
     const admin = await PlatformAdminModel.findOne({ email }).select("+passwordHash");
     const targetHash = admin ? admin.passwordHash : await getDummyPlatformHash();
     const validPassword = await verifyStaffPassword(password, targetHash);

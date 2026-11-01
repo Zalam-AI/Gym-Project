@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { connectToDatabase, runInTransactionOrFallback } from "gymos-admin-backend/lib/mongodb";
+import { enforceGymPlanLimit } from "gymos-admin-backend/lib/saas-enforcement";
 import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
@@ -163,6 +164,15 @@ export async function POST(request: Request) {
     if (!member) {
       await rollbackRequest();
       return NextResponse.json({ error: "Member account was not found." }, { status: 404 });
+    }
+
+    // Enforce SaaS plan member limit when enrolling a new member into this gym
+    if (!member.gymId || String(member.gymId) !== gymId.toString()) {
+      const memberLimit = await enforceGymPlanLimit(gymId, "members");
+      if (!memberLimit.allowed) {
+        await rollbackRequest();
+        return NextResponse.json({ error: memberLimit.error }, { status: 403 });
+      }
     }
 
     // Prevent overwriting an active membership in a different gym tenant

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { startOfGymDay } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase, runInTransactionOrFallback } from "gymos-admin-backend/lib/mongodb";
+import { enforceGymPlanLimit } from "gymos-admin-backend/lib/saas-enforcement";
 import MemberModel from "gymos-admin-backend/models/member";
 import MembershipModel from "gymos-admin-backend/models/membership";
 import PaymentModel from "gymos-admin-backend/models/payment";
@@ -189,6 +190,11 @@ export async function POST(request: Request) {
         { error: "A member with this phone number or email already exists in your gym." },
         { status: 409 },
       );
+    }
+
+    const memberLimit = await enforceGymPlanLimit(gymId, "members");
+    if (!memberLimit.allowed) {
+      return NextResponse.json({ error: memberLimit.error }, { status: 403 });
     }
 
     const membershipStart = joinDate ?? new Date();

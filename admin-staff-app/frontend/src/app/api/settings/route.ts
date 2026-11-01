@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 import { isValidTimezone, subdomainifyGymName } from "gymos-admin-backend/lib/gym-time";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
+import { enforceGymPlanLimit } from "gymos-admin-backend/lib/saas-enforcement";
 import { generateStaffInviteCode } from "gymos-admin-backend/lib/trainer-code";
 import GymModel from "gymos-admin-backend/models/gym";
 import StaffInviteModel from "gymos-admin-backend/models/staff-invite";
@@ -354,6 +355,11 @@ export async function POST(request: Request) {
     }
 
     if (action === "generate-staff-invite") {
+      const staffLimit = await enforceGymPlanLimit(ctx.gymId, "staff");
+      if (!staffLimit.allowed) {
+        return NextResponse.json({ error: staffLimit.error }, { status: 403 });
+      }
+
       const role = input.role === "owner" ? "owner" : "staff";
       const presetName = typeof input.presetName === "string" ? input.presetName.trim() : "";
       const presetEmail =

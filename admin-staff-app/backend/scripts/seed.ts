@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { Types } from "mongoose";
 import { resolve } from "node:path";
 import { connectToDatabase } from "../lib/mongodb";
+import { ensureDefaultSaasPlans } from "../lib/saas-enforcement";
 import { hashStaffPassword } from "../lib/staff-password";
 import AttendanceModel from "../models/attendance";
 import GymModel from "../models/gym";
@@ -82,6 +83,8 @@ const defaultAvailability = [
 
 async function seed() {
   await connectToDatabase();
+  const saasPlans = await ensureDefaultSaasPlans();
+  const growthPlan = saasPlans.find((p) => p.code === "growth") ?? saasPlans[0];
 
   const configuredGymId =
     process.env.GYMOS_GYM_ID && Types.ObjectId.isValid(process.env.GYMOS_GYM_ID)
@@ -102,6 +105,23 @@ async function seed() {
       },
       $setOnInsert: {
         slug: "gymos-elite-new-cairo",
+        subdomain: "gymoselitenewcairo",
+        platformSubscription: {
+          planId: growthPlan?._id ?? null,
+          planCode: "growth",
+          planName: "Growth Pro",
+          planTier: "growth",
+          billingStatus: "active",
+          paymentStatus: "paid",
+          billingCycle: "monthly",
+          priceAmount: 3800,
+          startDate: daysFromToday(-30),
+          expirationDate: daysFromToday(335),
+          renewalDate: daysFromToday(335),
+          gracePeriodDays: 10,
+          autoSuspendOnExpire: true,
+          notes: "Seeded active Growth Pro club workspace",
+        },
         ...(configuredGymId ? { _id: configuredGymId } : {}),
       },
     },

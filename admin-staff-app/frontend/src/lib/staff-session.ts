@@ -53,7 +53,8 @@ async function getSigningKey(secret: string): Promise<CryptoKey> {
 }
 
 function getSessionSecret(): string {
-  const secret = process.env.GYMOS_SESSION_SECRET;
+  const secret =
+    globalThis.process?.env?.["GYMOS_SESSION_SECRET"] || process.env.GYMOS_SESSION_SECRET;
   if (!secret || secret.length < 32) {
     throw new Error("GYMOS_SESSION_SECRET must contain at least 32 characters.");
   }
