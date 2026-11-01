@@ -195,6 +195,17 @@ const EXACT_AR: Record<string, string> = {
     "رمز QR غير صالح. يرجى مسح رمز QR المعروض في مكتب استقبال ناديك.",
   "Check in": "تسجيل حضور",
   "Checked in": "تم تسجيل الحضور",
+  "Check Out": "تسجيل انصراف",
+  "Check out": "تسجيل انصراف",
+  "Checking out...": "جاري تسجيل الانصراف...",
+  "Check-out could not be completed.": "تعذر إتمام تسجيل الانصراف.",
+  "Checked in on floor": "مسجل حضور في الصالة الآن",
+  "Not checked in yet": "لم يتم تسجيل الحضور بعد",
+  "Scan the front-desk QR code on arrival so reception and clients see you on floor.":
+    "امسح رمز QR في الاستقبال عند الوصول ليظهر تواجدك لموظفي الاستقبال والعملاء.",
+  "Gym QR Check-In & Check-Out": "تسجيل الحضور والانصراف برمز QR",
+  "Scan the Reception QR code right from the top of Home when you arrive, and tap Check Out when you finish.":
+    "امسح رمز QR من أعلى الصفحة الرئيسية فور وصولك للنادي، واضغط تسجيل انصراف عند الانتهاء.",
   "Check-in confirmed": "تم تأكيد حضورك بنجاح",
   "Check-in could not be completed.": "تعذر إتمام تسجيل الحضور.",
   "You're checked in,": "تم تسجيل حضورك بنجاح،",
@@ -1424,6 +1435,35 @@ const AR_PATTERNS: Array<[RegExp, (...args: string[]) => string]> = [
   [
     /^(.+)\s*—\s*tap to continue$/i,
     (_, title) => `${EXACT_AR[title.trim()] ?? title.trim()} — اضغط للمتابعة`,
+  ],
+  [
+    /^Check in to (.+)$/i,
+    (_, gym) => `تسجيل الحضور في ${gym.trim() === "your gym" ? "ناديك" : gym.trim()}`,
+  ],
+  [
+    /^Checked in at (.+)$/i,
+    (_, gym) => `مسجل حضور الآن في ${gym.trim()}`,
+  ],
+  [
+    /^Since (.+)\s*·\s*(.+)$/i,
+    (_, time, plan) => `منذ ${time.trim()} · ${EXACT_AR[plan.trim()] ?? plan.trim()}`,
+  ],
+  [
+    /^(.+)\s*·\s*Since (.+)$/i,
+    (_, gym, time) => `${gym.trim()} · منذ ${time.trim()}`,
+  ],
+  [
+    /^QR self-scan · Checked out (.+)$/i,
+    (_, time) => `مسح QR ذاتي · تم الانصراف ${time.trim()}`,
+  ],
+  [
+    /^Front desk · Checked out (.+)$/i,
+    (_, time) => `الاستقبال · تم الانصراف ${time.trim()}`,
+  ],
+  [
+    /^(.+)\s*·\s*Valid through (.+)$/i,
+    (_, plan, date) =>
+      `${EXACT_AR[plan.trim()] ?? plan.trim()} · صالح حتى ${translateDatesAndCurrency(date.trim())}`,
   ],
   [/^of$/i, () => "من"],
   [/^with$/i, () => "مع"],

@@ -116,6 +116,8 @@ export type TrainerProfileData = {
   email: string;
   status: string;
   checkedInNow: boolean;
+  activeCheckInId?: string | null;
+  checkedInAt?: string | null;
   availability: AvailabilitySlot[];
 };
 
@@ -124,6 +126,7 @@ export type FormattedVisit = {
   date: string;
   time: string;
   detail: string;
+  checkedOut?: boolean;
 };
 
 const ALL_WEEK_DAYS = ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"] as const;
@@ -156,7 +159,9 @@ export function TrainerPortalView({
   visits,
   dataError,
   isLoggingOut,
+  isCheckingOut = false,
   onOpenScanner,
+  onCheckout,
   onRefresh,
   onLogout,
 }: {
@@ -167,7 +172,9 @@ export function TrainerPortalView({
   visits: FormattedVisit[];
   dataError: string;
   isLoggingOut: boolean;
+  isCheckingOut?: boolean;
   onOpenScanner: () => void;
+  onCheckout: () => Promise<void>;
   onRefresh: () => Promise<unknown>;
   onLogout: () => Promise<void>;
 }) {
@@ -518,6 +525,78 @@ export function TrainerPortalView({
 
           {activeTab === "Pass" && (
             <div className="space-y-4">
+              {/* Prominent Top Floor Check-In / Check-Out Action */}
+              {!trainer.checkedInNow ? (
+                <section
+                  aria-label="Gym Floor Check-In"
+                  className={`${ui.cardElevated} p-4`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className={ui.badgeWarning}>
+                        <ScanLine size={12} aria-hidden="true" />
+                        Not checked in yet
+                      </span>
+                      <p className="mt-2 text-[14px] font-bold tracking-[-0.02em] text-ink">
+                        Check in to {trainer.gymName}
+                      </p>
+                      <p className="mt-0.5 text-[11px] leading-4 text-ink-secondary">
+                        Scan the front-desk QR code on arrival so reception and clients see you on floor.
+                      </p>
+                    </div>
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
+                      <QrCode size={18} aria-hidden="true" />
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenScanner}
+                    className={`${ui.btnPrimary} mt-3.5 flex min-h-12 w-full rounded-2xl px-4 text-[13px]`}
+                  >
+                    <ScanLine size={18} aria-hidden="true" />
+                    Scan Gym QR Code
+                  </button>
+                </section>
+              ) : (
+                <section
+                  aria-label="Active Floor Shift"
+                  className="rounded-2xl border border-accent-border bg-accent-soft p-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="size-2 rounded-full bg-accent" aria-hidden="true" />
+                        <p className="text-[12px] font-semibold text-accent-text">
+                          Checked in on floor
+                        </p>
+                      </div>
+                      <p className="mt-0.5 text-[10px] text-ink-secondary">
+                        {trainer.gymName}
+                        {trainer.checkedInAt
+                          ? ` · Since ${new Intl.DateTimeFormat("en-US", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            }).format(new Date(trainer.checkedInAt))}`
+                          : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void onCheckout()}
+                      disabled={isCheckingOut}
+                      className={`${ui.btnSecondary} min-h-10 rounded-xl px-3.5 text-[11px]`}
+                    >
+                      {isCheckingOut ? (
+                        <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />
+                      ) : (
+                        <LogOut size={14} aria-hidden="true" />
+                      )}
+                      {isCheckingOut ? "Checking out..." : "Check Out"}
+                    </button>
+                  </div>
+                </section>
+              )}
+
               <section
                 aria-labelledby="coach-pass-heading"
                 className={`${ui.cardElevated} overflow-hidden`}
@@ -570,15 +649,6 @@ export function TrainerPortalView({
                   </span>
                 </div>
               </section>
-
-              <button
-                type="button"
-                onClick={onOpenScanner}
-                className={`${ui.btnPrimary} flex min-h-14 w-full rounded-2xl px-4 text-[13px]`}
-              >
-                <ScanLine size={19} aria-hidden="true" />
-                Scan Gym QR Code
-              </button>
 
               <section className={`${ui.card} p-4`}>
                 <div className="flex items-center justify-between">

@@ -225,9 +225,10 @@ export async function GET(request: NextRequest) {
         .lean(),
     ]);
 
-    const checkedInNow = activeAttendancesToday.some(
+    const activeTrainerCheckIn = activeAttendancesToday.find(
       (item) => item.trainerId && String(item.trainerId) === trainer._id.toString(),
     );
+    const checkedInNow = Boolean(activeTrainerCheckIn);
     const activeFloorMemberIds = new Set(
       activeAttendancesToday
         .filter((item) => item.memberId)
@@ -391,6 +392,10 @@ export async function GET(request: NextRequest) {
         email: trainer.email ?? "",
         status: trainer.status ?? "active",
         checkedInNow,
+        activeCheckInId: activeTrainerCheckIn ? String(activeTrainerCheckIn._id) : null,
+        checkedInAt: activeTrainerCheckIn
+          ? new Date(activeTrainerCheckIn.checkInTime).toISOString()
+          : null,
         availability: (
           (trainer.availability ?? []) as Array<{
             day: string;
@@ -412,6 +417,7 @@ export async function GET(request: NextRequest) {
       visits: trainerVisits.map((visit) => ({
         id: String(visit._id),
         checkInTime: new Date(visit.checkInTime).toISOString(),
+        checkOutTime: visit.checkOutTime ? new Date(visit.checkOutTime).toISOString() : null,
         checkedOut: visit.status === "checked-out" || Boolean(visit.checkOutTime),
         source: visit.source ?? "Trainer self-scan",
       })),

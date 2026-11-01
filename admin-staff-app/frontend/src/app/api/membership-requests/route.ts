@@ -139,38 +139,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, status: "declined" });
     }
 
-    // Atomically lock the pending request first to prevent duplicate acceptance
-    const reqDoc = await MembershipRequestModel.findOneAndUpdate(
-      { _id: requestId, gymId, status: "pending" },
-      { $set: { status: "accepted", respondedAt: new Date() } },
-      { new: true },
-    );
+    const pendingPreview = await MembershipRequestModel.findOne({
+      _id: requestId,
+      gymId,
+      status: "pending",
+    });
 
-    if (!reqDoc) {
+    if (!pendingPreview) {
       return NextResponse.json(
         { error: "Pending membership request was not found or was already handled." },
         { status: 404 },
       );
     }
 
-    const rollbackRequest = async () => {
-      await MembershipRequestModel.updateOne(
-        { _id: reqDoc._id },
-        { $set: { status: "pending" }, $unset: { respondedAt: 1 } },
-      ).catch(() => undefined);
-    };
-
-    const member = await MemberModel.findById(reqDoc.memberId);
+    const member = await MemberModel.findById(pendingPreview.memberId);
     if (!member) {
-      await rollbackRequest();
       return NextResponse.json({ error: "Member account was not found." }, { status: 404 });
     }
 
-    // Enforce SaaS plan member limit when enrolling a new member into this gym
+    // Enforce SaaS plan member limit BEFORE mutating request status so polling clients never see a half-accepted gap
     if (!member.gymId || String(member.gymId) !== gymId.toString()) {
       const memberLimit = await enforceGymPlanLimit(gymId, "members");
       if (!memberLimit.allowed) {
-        await rollbackRequest();
         return NextResponse.json({ error: memberLimit.error }, { status: 403 });
       }
     }
@@ -186,7 +176,6 @@ export async function POST(request: Request) {
       });
       if (otherGymActiveMembership) {
         const otherGym = await GymModel.findById(member.gymId).select("name");
-        await rollbackRequest();
         return NextResponse.json(
           {
             error: `This member already has an active plan at ${otherGym?.name ?? "another gym"}.`,
@@ -196,91 +185,131 @@ export async function POST(request: Request) {
       }
     }
 
-    try {
-      const acceptedMembership = await runInTransactionOrFallback(async (tx) => {
-        const sessionOpt = tx ? { session: tx } : {};
-        const wasAlreadyInGym = member.gymId && String(member.gymId) === gymId.toString();
-        member.gymId = gymId;
-        member.status = "active";
-        if (!wasAlreadyInGym) {
-          member.joinDate = new Date();
-        }
-        await member.save(sessionOpt);
+    const wasAlreadyInGym = Boolean(member.gymId && String(member.gymId) === gymId.toString());
 
-        const existingMembership = await MembershipModel.findOne(
-          { gymId, memberId: member._id },
-          null,
-          sessionOpt,
-        ).sort({ expiryDate: -1 });
+    const txOutcome = await runInTransactionOrFallback(async (tx) => {
+      const sessionOpt = tx ? { session: tx } : {};
+      const now = new Date();
 
-        let membershipDoc;
-        if (existingMembership) {
-          const baseStart =
-            existingMembership.expiryDate > todayUtc ? existingMembership.expiryDate : todayUtc;
-          existingMembership.planName = reqDoc.planName;
-          existingMembership.price = reqDoc.price;
-          existingMembership.startDate =
-            existingMembership.expiryDate > todayUtc ? existingMembership.startDate : todayUtc;
-          existingMembership.expiryDate = addMonths(baseStart, reqDoc.durationMonths);
-          existingMembership.status = "active";
-          existingMembership.paymentStatus = "Paid";
-          await existingMembership.save(sessionOpt);
-          membershipDoc = existingMembership;
-        } else {
-          const [created] = await MembershipModel.create(
-            [
-              {
-                gymId,
-                memberId: member._id,
-                planName: reqDoc.planName,
-                price: reqDoc.price,
-                startDate: todayUtc,
-                expiryDate: addMonths(todayUtc, reqDoc.durationMonths),
-                status: "active",
-                paymentStatus: "Paid",
-              },
-            ],
-            sessionOpt,
-          );
-          membershipDoc = created;
-        }
+      // Atomically claim the pending request INSIDE the same transaction as Member + Membership + Payment
+      const claimedReq = await MembershipRequestModel.findOneAndUpdate(
+        { _id: requestId, gymId, status: "pending" },
+        { $set: { status: "accepted", respondedAt: now } },
+        { new: true, ...sessionOpt },
+      );
+      if (!claimedReq) {
+        return null;
+      }
 
-        await PaymentModel.create(
+      // Clean up any duplicate pending requests from this member so staff cannot accept/charge twice
+      await MembershipRequestModel.updateMany(
+        { memberId: member._id, _id: { $ne: claimedReq._id }, status: "pending" },
+        { $set: { status: "declined", respondedAt: now } },
+        sessionOpt,
+      );
+
+      // Use atomic findOneAndUpdate instead of mutating an outer Mongoose document across transaction retries
+      await MemberModel.findOneAndUpdate(
+        { _id: member._id },
+        {
+          $set: {
+            gymId,
+            status: "active",
+            ...(!wasAlreadyInGym ? { joinDate: now } : {}),
+          },
+        },
+        { new: true, ...sessionOpt },
+      );
+
+      const existingMembership = await MembershipModel.findOne(
+        { gymId, memberId: member._id },
+        null,
+        sessionOpt,
+      ).sort({ expiryDate: -1 });
+
+      let membershipDoc;
+      if (existingMembership) {
+        const baseStart =
+          existingMembership.expiryDate > todayUtc ? existingMembership.expiryDate : todayUtc;
+        const nextStart =
+          existingMembership.expiryDate > todayUtc ? existingMembership.startDate : todayUtc;
+        membershipDoc = await MembershipModel.findOneAndUpdate(
+          { _id: existingMembership._id },
+          {
+            $set: {
+              planName: claimedReq.planName,
+              price: claimedReq.price,
+              startDate: nextStart,
+              expiryDate: addMonths(baseStart, claimedReq.durationMonths),
+              status: "active",
+              paymentStatus: "Paid",
+            },
+          },
+          { new: true, ...sessionOpt },
+        );
+      } else {
+        const [created] = await MembershipModel.create(
           [
             {
               gymId,
               memberId: member._id,
-              amount: reqDoc.price,
-              description: `${reqDoc.planName} (Mobile signup)`,
-              paymentMethod: reqDoc.paymentMethod,
-              status: "Paid",
-              date: new Date(),
+              planName: claimedReq.planName,
+              price: claimedReq.price,
+              startDate: todayUtc,
+              expiryDate: addMonths(todayUtc, claimedReq.durationMonths),
+              status: "active",
+              paymentStatus: "Paid",
             },
           ],
           sessionOpt,
         );
+        membershipDoc = created;
+      }
 
-        return membershipDoc;
-      });
+      await PaymentModel.create(
+        [
+          {
+            gymId,
+            memberId: member._id,
+            amount: claimedReq.price,
+            description: `${claimedReq.planName} (Mobile signup)`,
+            paymentMethod: claimedReq.paymentMethod,
+            status: "Paid",
+            date: now,
+          },
+        ],
+        sessionOpt,
+      );
 
-      return NextResponse.json({
-        ok: true,
-        status: "accepted",
-        accepted: {
-          requestId: reqDoc._id.toString(),
-          memberId: member._id.toString(),
-          memberName: member.fullName,
-          gymName: gym.name,
-          planName: acceptedMembership.planName,
-          price: reqDoc.price,
-          paymentMethod: reqDoc.paymentMethod,
-          expiryDate: acceptedMembership.expiryDate.toISOString().slice(0, 10),
-        },
-      });
-    } catch (err) {
-      await rollbackRequest();
-      throw err;
+      return { reqDoc: claimedReq, membershipDoc: membershipDoc! };
+    });
+
+    if (!txOutcome) {
+      return NextResponse.json(
+        { error: "Pending membership request was not found or was already handled." },
+        { status: 404 },
+      );
     }
+
+    const { reqDoc, acceptedMembership } = {
+      reqDoc: txOutcome.reqDoc,
+      acceptedMembership: txOutcome.membershipDoc,
+    };
+
+    return NextResponse.json({
+      ok: true,
+      status: "accepted",
+      accepted: {
+        requestId: reqDoc._id.toString(),
+        memberId: member._id.toString(),
+        memberName: member.fullName,
+        gymName: gym.name,
+        planName: acceptedMembership.planName,
+        price: reqDoc.price,
+        paymentMethod: reqDoc.paymentMethod,
+        expiryDate: acceptedMembership.expiryDate.toISOString().slice(0, 10),
+      },
+    });
   } catch (error) {
     console.error("Failed to process membership request:", error);
     return NextResponse.json(

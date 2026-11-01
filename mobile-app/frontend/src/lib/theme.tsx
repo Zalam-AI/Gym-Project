@@ -94,15 +94,15 @@ export const THEME_TOKENS: Record<ResolvedTheme, SemanticThemeTokens> = {
  */
 export const ui = {
   pageCanvas:
-    "flex min-h-screen items-center justify-center bg-canvas px-0 py-0 sm:px-6 sm:py-8",
+    "flex h-[100dvh] max-h-[100dvh] w-full items-center justify-center overflow-hidden bg-canvas px-0 py-0 md:px-6 md:py-6",
   appFrame:
-    "flex h-[100dvh] w-full max-w-[430px] flex-col overflow-hidden bg-app text-ink sm:h-[850px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-line",
+    "relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-app text-ink md:h-[min(860px,calc(100dvh-48px))] md:max-w-[420px] md:rounded-3xl md:border md:border-line",
   authFrame:
-    "flex min-h-[100dvh] w-full max-w-[430px] flex-col bg-app text-ink sm:min-h-[760px] sm:max-h-[calc(100dvh-64px)] sm:rounded-3xl sm:border sm:border-line",
+    "relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-y-auto bg-app text-ink md:h-auto md:min-h-[720px] md:max-h-[calc(100dvh-48px)] md:max-w-[420px] md:rounded-3xl md:border md:border-line",
   appHeader:
-    "flex min-h-[72px] items-center justify-between border-b border-line bg-surface px-5 pt-[max(env(safe-area-inset-top),8px)]",
+    "flex min-h-[68px] shrink-0 items-center justify-between border-b border-line bg-surface px-4 pt-[max(env(safe-area-inset-top),8px)] pb-2",
   bottomNav:
-    "border-t border-line bg-surface pb-[max(env(safe-area-inset-bottom),8px)] pt-2",
+    "shrink-0 border-t border-line bg-surface pb-[max(env(safe-area-inset-bottom),8px)] pt-2",
   card: "rounded-2xl border border-line bg-surface",
   cardInteractive:
     "rounded-2xl border border-line bg-surface transition-colors hover:bg-hover",

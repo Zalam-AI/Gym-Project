@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { connectToDatabase } from "gymos-admin-backend/lib/mongodb";
 import GymModel from "gymos-admin-backend/models/gym";
 import MemberModel from "gymos-admin-backend/models/member";
+import MembershipModel from "gymos-admin-backend/models/membership";
 import MembershipPlanModel from "gymos-admin-backend/models/membership-plan";
 import MembershipRequestModel from "gymos-admin-backend/models/membership-request";
 import {
@@ -217,12 +218,31 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const plans = await MembershipPlanModel.find({ gymId: gym._id, active: true }).sort({
-      price: 1,
-      createdAt: 1,
-    });
+    const todayUtc = new Date();
+    todayUtc.setUTCHours(0, 0, 0, 0);
+
+    const [plans, activeMembership] = await Promise.all([
+      MembershipPlanModel.find({ gymId: gym._id, active: true }).sort({
+        price: 1,
+        createdAt: 1,
+      }),
+      MembershipModel.findOne({
+        gymId: gym._id,
+        memberId: member._id,
+        status: "active",
+        expiryDate: { $gte: todayUtc },
+      }).sort({ expiryDate: -1 }),
+    ]);
+
+    if (activeMembership && (!member.gymId || String(member.gymId) !== gym._id.toString())) {
+      await MemberModel.updateOne(
+        { _id: member._id },
+        { $set: { gymId: gym._id, status: "active" } },
+      );
+    }
 
     return memberApiResponse(request, {
+      alreadyEnrolled: Boolean(activeMembership),
       gym: {
         id: gym._id.toString(),
         name: gym.name,
@@ -347,9 +367,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [gym, plan] = await Promise.all([
+    const todayUtc = new Date();
+    todayUtc.setUTCHours(0, 0, 0, 0);
+
+    const [gym, plan, existingActiveMembership] = await Promise.all([
       GymModel.findOne({ _id: gymId, status: "active" }).select("name"),
       MembershipPlanModel.findOne({ _id: planId, gymId, active: true }),
+      MembershipModel.findOne({
+        gymId,
+        memberId: member._id,
+        status: "active",
+        expiryDate: { $gte: todayUtc },
+        paymentStatus: "Paid",
+      }).sort({ expiryDate: -1 }),
     ]);
 
     if (!gym) {
@@ -360,6 +390,59 @@ export async function POST(request: NextRequest) {
         request,
         { error: "Selected membership plan is no longer available." },
         404,
+      );
+    }
+
+    // Prevent duplicate payment requests / double-charging if staff already accepted this member's plan
+    if (existingActiveMembership) {
+      if (!member.gymId || String(member.gymId) !== gym._id.toString()) {
+        await MemberModel.updateOne(
+          { _id: member._id },
+          { $set: { gymId: gym._id, status: "active" } },
+        );
+      }
+      await MembershipRequestModel.updateMany(
+        { memberId: member._id, status: "pending" },
+        { $set: { status: "declined", respondedAt: new Date() } },
+      );
+      return memberApiResponse(
+        request,
+        {
+          alreadyEnrolled: true,
+          pendingRequest: null,
+          gymName: gym.name,
+          planName: existingActiveMembership.planName,
+        },
+        200,
+      );
+    }
+
+    // Idempotently return existing identical pending request instead of creating duplicates
+    const existingIdenticalPending = await MembershipRequestModel.findOne({
+      gymId: gym._id,
+      memberId: member._id,
+      planId: plan._id,
+      paymentMethod: paymentMethod as PaymentMethod,
+      status: "pending",
+    }).sort({ createdAt: -1 });
+
+    if (existingIdenticalPending) {
+      return memberApiResponse(
+        request,
+        {
+          idempotent: true,
+          pendingRequest: {
+            id: existingIdenticalPending._id.toString(),
+            gymId: gym._id.toString(),
+            gymName: gym.name,
+            planName: existingIdenticalPending.planName,
+            price: existingIdenticalPending.price,
+            durationMonths: existingIdenticalPending.durationMonths,
+            paymentMethod: existingIdenticalPending.paymentMethod,
+            createdAt: existingIdenticalPending.createdAt.toISOString(),
+          },
+        },
+        200,
       );
     }
 

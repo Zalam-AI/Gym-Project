@@ -38,6 +38,8 @@ type CheckIn = {
   memberName?: string;
   specialty?: string;
   time: string;
+  checkOutTime?: string | null;
+  checkOutFormatted?: string | null;
   membershipStatus: MembershipStatus;
   checkedOut: boolean;
   source: "Front desk" | "Member self-scan" | "Trainer self-scan";
@@ -259,10 +261,24 @@ export function AttendancePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "checkout", checkInId }),
       });
-      const data = (await response.json()) as { error?: string; occupancy?: number };
+      const data = (await response.json()) as {
+        error?: string;
+        occupancy?: number;
+        checkOutTime?: string;
+        checkOutFormatted?: string;
+      };
       if (!response.ok) throw new Error(data.error ?? "Check-out could not be completed.");
       setCheckIns((prev) =>
-        prev.map((item) => (item.id === checkInId ? { ...item, checkedOut: true } : item)),
+        prev.map((item) =>
+          item.id === checkInId
+            ? {
+                ...item,
+                checkedOut: true,
+                checkOutTime: data.checkOutTime ?? item.checkOutTime ?? null,
+                checkOutFormatted: data.checkOutFormatted ?? item.checkOutFormatted ?? null,
+              }
+            : item,
+        ),
       );
       if (typeof data.occupancy === "number") {
         setOccupancy(data.occupancy);
@@ -716,7 +732,10 @@ export function AttendancePage() {
                           {checkIn.checkedOut ? (
                             <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-[#8993a0]">
                               <CheckCircle2 size={13} aria-hidden="true" />
-                              Checked out
+                              <span>
+                                Checked out
+                                {checkIn.checkOutFormatted ? ` · ${checkIn.checkOutFormatted}` : ""}
+                              </span>
                             </span>
                           ) : (
                             <button

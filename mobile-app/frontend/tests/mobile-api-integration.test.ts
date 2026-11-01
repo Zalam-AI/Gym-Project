@@ -2705,4 +2705,382 @@ describe("GymOS Mobile Hosted Backend Integration Suite", () => {
     );
     assert.equal(finished.json.log?.exercises[0]?.difficultyRating, 7);
   });
+
+  it("20. Guarantees first-payment staff acceptance enrolls immediately and blocks duplicate charges", async () => {
+    const suffix = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+    const reg = await hostedMobileRequest<{
+      sessionToken?: string;
+      member?: { id?: string };
+    }>("/api/auth/member/register", {
+      method: "POST",
+      body: {
+        accountType: "member",
+        fullName: `First Accept Guard ${suffix}`,
+        phone: `+20116${suffix.slice(0, 7)}`,
+        email: `first.accept.${suffix}@example.com`,
+        password: "MemberPass123!",
+      },
+    });
+    assert.equal(reg.status, 201);
+    const initialToken = reg.json.sessionToken!;
+
+    // 1. Scan gym QR & submit first Cash subscription request
+    const plansRes = await hostedMobileRequest<{
+      gym?: { id: string; slug: string };
+      plans?: Array<{ id: string; name: string; price: number }>;
+    }>("/api/member-subscriptions?qr=GYMOS-GYM:gymos-elite-new-cairo", {
+      token: initialToken,
+    });
+    assert.equal(plansRes.status, 200);
+    const gymId = plansRes.json.gym!.id;
+    const plan = plansRes.json.plans![0];
+
+    const sub1 = await hostedMobileRequest<{
+      pendingRequest?: { id: string; planId: string; price: number };
+    }>("/api/member-subscriptions", {
+      method: "POST",
+      token: initialToken,
+      body: {
+        action: "subscribe",
+        gymId,
+        planId: plan.id,
+        paymentMethod: "Cash",
+      },
+    });
+    assert.equal(sub1.status, 201);
+    const reqId = sub1.json.pendingRequest!.id;
+
+    // 2. Duplicate submit while pending is idempotent (returns same request ID, status 200)
+    const subDuplicatePending = await hostedMobileRequest<{
+      idempotent?: boolean;
+      pendingRequest?: { id: string };
+    }>("/api/member-subscriptions", {
+      method: "POST",
+      token: initialToken,
+      body: {
+        action: "subscribe",
+        gymId,
+        planId: plan.id,
+        paymentMethod: "Cash",
+      },
+    });
+    assert.equal(subDuplicatePending.status, 200);
+    assert.equal(subDuplicatePending.json.idempotent, true);
+    assert.equal(subDuplicatePending.json.pendingRequest?.id, reqId);
+
+    // 3. Gym staff accepts the FIRST payment -> member must immediately become enrolled & Active
+    const staffLogin = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ email: "admin@gymos.local", password: "GymOSAdmin123!" }),
+    });
+    const staffCookie = staffLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+    const acceptRes = await fetch(`${API_BASE}/api/membership-requests`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        Cookie: staffCookie,
+      },
+      body: JSON.stringify({ requestId: reqId, action: "accept" }),
+    });
+    assert.equal(acceptRes.status, 200);
+
+    // Second accept on same requestId must be rejected cleanly (never charging twice)
+    const doubleAcceptRes = await fetch(`${API_BASE}/api/membership-requests`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        Cookie: staffCookie,
+      },
+      body: JSON.stringify({ requestId: reqId, action: "accept" }),
+    });
+    assert.equal(doubleAcceptRes.status, 404);
+
+    // 4. Mobile portal immediately unlocks on the FIRST accept with upgraded sessionToken
+    const portalAfterFirstAccept = await hostedMobileRequest<{
+      enrolledInGym?: boolean;
+      sessionToken?: string;
+      pendingRequest?: unknown;
+      member?: { id: string; gymId: string; status: string };
+    }>("/api/member-portal", { token: initialToken });
+    assert.equal(portalAfterFirstAccept.status, 200);
+    assert.equal(portalAfterFirstAccept.json.enrolledInGym, true);
+    assert.equal(portalAfterFirstAccept.json.member?.status, "Active");
+    assert.equal(portalAfterFirstAccept.json.pendingRequest, null);
+    const memberId = portalAfterFirstAccept.json.member!.id;
+    const activeToken = portalAfterFirstAccept.json.sessionToken ?? initialToken;
+
+    // 5. Even if the phone re-scans the gym QR or posts subscribe again, backend returns alreadyEnrolled: true and creates ZERO duplicate requests/payments
+    const rescanAfterAccept = await hostedMobileRequest<{
+      alreadyEnrolled?: boolean;
+    }>("/api/member-subscriptions?qr=GYMOS-GYM:gymos-elite-new-cairo", {
+      token: activeToken,
+    });
+    assert.equal(rescanAfterAccept.status, 200);
+    assert.equal(rescanAfterAccept.json.alreadyEnrolled, true);
+
+    const resubAfterAccept = await hostedMobileRequest<{
+      alreadyEnrolled?: boolean;
+      pendingRequest?: unknown;
+    }>("/api/member-subscriptions", {
+      method: "POST",
+      token: activeToken,
+      body: {
+        action: "subscribe",
+        gymId,
+        planId: plan.id,
+        paymentMethod: "Cash",
+      },
+    });
+    assert.equal(resubAfterAccept.status, 200);
+    assert.equal(resubAfterAccept.json.alreadyEnrolled, true);
+    assert.equal(resubAfterAccept.json.pendingRequest, null);
+
+    // Verify staff payments ledger has ONLY ONE payment for this member (zero double charge!)
+    const paymentsRes = await fetch(`${API_BASE}/api/payments`, {
+      headers: { Origin: "http://localhost:3000", Cookie: staffCookie },
+    });
+    const paymentsData = (await paymentsRes.json()) as {
+      transactions?: Array<{ memberId: string; amount: number; status: string }>;
+    };
+    const memberPayments = (paymentsData.transactions ?? []).filter(
+      (p) => p.memberId === memberId,
+    );
+    assert.equal(
+      memberPayments.length,
+      1,
+      "Expected exactly ONE payment record after first staff acceptance (no double charge)",
+    );
+    assert.equal(memberPayments[0]?.status, "Paid");
+  });
+
+  it("21. Syncs mobile Member & Trainer self check-in and self check-out directly to the Gym Staff Website", async () => {
+    const staffLogin = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      body: JSON.stringify({ email: "admin@gymos.local", password: "GymOSAdmin123!" }),
+    });
+    const staffCookie = staffLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+    // Create & enroll a fresh member for clean attendance verification
+    const suffix = `${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+    const regMember = await hostedMobileRequest<{ sessionToken?: string }>(
+      "/api/auth/member/register",
+      {
+        method: "POST",
+        body: {
+          accountType: "member",
+          fullName: `Checkout Sync Member ${suffix}`,
+          phone: `+20115${suffix.slice(0, 7)}`,
+          email: `checkout.member.${suffix}@example.com`,
+          password: "MemberPass123!",
+        },
+      },
+    );
+    assert.equal(regMember.status, 201);
+
+    const plansRes = await hostedMobileRequest<{
+      gym?: { id: string; slug: string };
+      plans?: Array<{ id: string }>;
+    }>("/api/member-subscriptions?qr=GYMOS-GYM:gymos-elite-new-cairo", {
+      token: regMember.json.sessionToken!,
+    });
+    const gymId = plansRes.json.gym!.id;
+    const subRes = await hostedMobileRequest<{ pendingRequest?: { id: string } }>(
+      "/api/member-subscriptions",
+      {
+        method: "POST",
+        token: regMember.json.sessionToken!,
+        body: {
+          action: "subscribe",
+          gymId,
+          planId: plansRes.json.plans![0].id,
+          paymentMethod: "Cash",
+        },
+      },
+    );
+    await fetch(`${API_BASE}/api/membership-requests`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        Cookie: staffCookie,
+      },
+      body: JSON.stringify({
+        requestId: subRes.json.pendingRequest!.id,
+        action: "accept",
+      }),
+    });
+    const memberPortalInit = await hostedMobileRequest<{
+      sessionToken?: string;
+      member?: { id: string; checkedInNow?: boolean };
+    }>("/api/member-portal", { token: regMember.json.sessionToken! });
+    const memberToken = memberPortalInit.json.sessionToken!;
+    const memberId = memberPortalInit.json.member!.id;
+    assert.equal(memberPortalInit.json.member?.checkedInNow, false);
+
+    // 1. Member checks in via Gym QR -> reflected on mobile & Staff Website
+    const memberCheckIn = await hostedMobileRequest<{
+      checkIn?: { id: string; checkInTime: string };
+    }>("/api/attendance", {
+      method: "POST",
+      token: memberToken,
+      body: {
+        action: "checkin",
+        personType: "member",
+        memberId,
+        source: "Member self-scan",
+        gymQrPayload: `GYMOS-GYM:${gymId}`,
+      },
+    });
+    assert.equal(memberCheckIn.status, 201);
+    const memberCheckInId = memberCheckIn.json.checkIn!.id;
+
+    const memberPortalCheckedIn = await hostedMobileRequest<{
+      member?: { checkedInNow?: boolean; activeCheckInId?: string | null };
+    }>("/api/member-portal", { token: memberToken });
+    assert.equal(memberPortalCheckedIn.json.member?.checkedInNow, true);
+    assert.equal(memberPortalCheckedIn.json.member?.activeCheckInId, memberCheckInId);
+
+    const staffBeforeMemberOut = await (
+      await fetch(`${API_BASE}/api/attendance`, {
+        headers: { Origin: "http://localhost:3000", Cookie: staffCookie },
+      })
+    ).json() as {
+      checkIns: Array<{ id: string; checkedOut: boolean; checkOutFormatted?: string | null }>;
+    };
+    const staffMemberRowIn = staffBeforeMemberOut.checkIns.find(
+      (r) => r.id === memberCheckInId,
+    );
+    assert.ok(staffMemberRowIn, "Expected member check-in visible on Staff Website");
+    assert.equal(staffMemberRowIn?.checkedOut, false);
+
+    // 2. Create & register a fresh mobile Trainer and check them in
+    const genInvite = await fetch(`${API_BASE}/api/trainers`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        Cookie: staffCookie,
+      },
+      body: JSON.stringify({
+        action: "generate-code",
+        presetName: `Checkout Coach ${suffix}`,
+        presetSpecialty: "Strength & Conditioning",
+      }),
+    });
+    const inviteData = (await genInvite.json()) as { invite?: { code: string } };
+    const regTrainer = await hostedMobileRequest<{
+      sessionToken?: string;
+      trainer?: { id: string };
+    }>("/api/auth/member/register", {
+      method: "POST",
+      body: {
+        accountType: "trainer",
+        trainerCode: inviteData.invite!.code,
+        fullName: `Checkout Coach ${suffix}`,
+        phone: `+20114${suffix.slice(0, 7)}`,
+        email: `checkout.coach.${suffix}@example.com`,
+        specialty: "Strength & Conditioning",
+        password: "TrainerPass123!",
+      },
+    });
+    assert.equal(regTrainer.status, 201);
+    const trainerToken = regTrainer.json.sessionToken!;
+    const trainerId = regTrainer.json.trainer!.id;
+
+    const trainerCheckIn = await hostedMobileRequest<{
+      checkIn?: { id: string };
+    }>("/api/attendance", {
+      method: "POST",
+      token: trainerToken,
+      body: {
+        action: "checkin",
+        personType: "trainer",
+        trainerId,
+        source: "Trainer self-scan",
+        gymQrPayload: `GYMOS-GYM:${gymId}`,
+      },
+    });
+    assert.equal(trainerCheckIn.status, 201);
+    const trainerCheckInId = trainerCheckIn.json.checkIn!.id;
+
+    // Security check: Member cannot check out Trainer's checkInId (403)
+    const crossAttendeeAttempt = await hostedMobileRequest<{ error?: string }>(
+      "/api/attendance",
+      {
+        method: "POST",
+        token: memberToken,
+        body: { action: "checkout", checkInId: trainerCheckInId },
+      },
+    );
+    assert.equal(crossAttendeeAttempt.status, 403);
+
+    // 3. Member checks out from mobile app -> Staff Website immediately sees checkedOut: true
+    const memberCheckOut = await hostedMobileRequest<{
+      checkInId?: string;
+      checkOutTime?: string;
+      occupancy?: number;
+    }>("/api/attendance", {
+      method: "POST",
+      token: memberToken,
+      body: { action: "checkout", checkInId: memberCheckInId },
+    });
+    assert.equal(memberCheckOut.status, 200);
+    assert.equal(memberCheckOut.json.checkInId, memberCheckInId);
+    assert.ok(memberCheckOut.json.checkOutTime);
+
+    const memberPortalAfterOut = await hostedMobileRequest<{
+      member?: { checkedInNow?: boolean; activeCheckInId?: string | null };
+      visits?: Array<{ id: string; checkedOut?: boolean; checkOutTime?: string | null }>;
+    }>("/api/member-portal", { token: memberToken });
+    assert.equal(memberPortalAfterOut.json.member?.checkedInNow, false);
+    assert.equal(memberPortalAfterOut.json.member?.activeCheckInId, null);
+    assert.equal(
+      memberPortalAfterOut.json.visits?.find((v) => v.id === memberCheckInId)?.checkedOut,
+      true,
+    );
+
+    // 4. Trainer checks out from mobile app -> Staff Website immediately sees checkedOut: true for both!
+    const trainerCheckOut = await hostedMobileRequest<{
+      checkInId?: string;
+      checkOutTime?: string;
+    }>("/api/attendance", {
+      method: "POST",
+      token: trainerToken,
+      body: { action: "checkout", checkInId: trainerCheckInId },
+    });
+    assert.equal(trainerCheckOut.status, 200);
+    assert.equal(trainerCheckOut.json.checkInId, trainerCheckInId);
+
+    const trainerPortalAfterOut = await hostedMobileRequest<{
+      trainer?: { checkedInNow?: boolean; activeCheckInId?: string | null };
+    }>("/api/trainer-portal", { token: trainerToken });
+    assert.equal(trainerPortalAfterOut.json.trainer?.checkedInNow, false);
+    assert.equal(trainerPortalAfterOut.json.trainer?.activeCheckInId, null);
+
+    const staffAfterBothOut = await (
+      await fetch(`${API_BASE}/api/attendance`, {
+        headers: { Origin: "http://localhost:3000", Cookie: staffCookie },
+      })
+    ).json() as {
+      checkIns: Array<{
+        id: string;
+        checkedOut: boolean;
+        checkOutTime?: string | null;
+        checkOutFormatted?: string | null;
+      }>;
+    };
+    const staffMemberAfter = staffAfterBothOut.checkIns.find((r) => r.id === memberCheckInId);
+    const staffTrainerAfter = staffAfterBothOut.checkIns.find(
+      (r) => r.id === trainerCheckInId,
+    );
+    assert.equal(staffMemberAfter?.checkedOut, true);
+    assert.ok(staffMemberAfter?.checkOutFormatted);
+    assert.equal(staffTrainerAfter?.checkedOut, true);
+    assert.ok(staffTrainerAfter?.checkOutFormatted);
+  });
 });

@@ -181,6 +181,8 @@ export async function GET(request: Request) {
       specialty?: string;
       time: string;
       checkInTime: string;
+      checkOutTime?: string | null;
+      checkOutFormatted?: string | null;
       membershipStatus: MembershipStatus;
       checkedOut: boolean;
       source: string;
@@ -192,6 +194,10 @@ export async function GET(request: Request) {
         name: string;
         specialty?: string;
       } | null;
+      const checkOutIso = record.checkOutTime ? new Date(record.checkOutTime).toISOString() : null;
+      const checkOutFormatted = record.checkOutTime
+        ? formatTimeInTimezone(new Date(record.checkOutTime), tz)
+        : null;
       if (record.attendeeType === "trainer" || trainer) {
         if (!trainer) return [];
         const id = trainer._id.toString();
@@ -205,6 +211,8 @@ export async function GET(request: Request) {
             specialty: trainer.specialty ?? "Trainer",
             time: formatTimeInTimezone(new Date(record.checkInTime), tz),
             checkInTime: new Date(record.checkInTime).toISOString(),
+            checkOutTime: checkOutIso,
+            checkOutFormatted,
             membershipStatus: "Active" as MembershipStatus,
             checkedOut: record.status === "checked-out" || Boolean(record.checkOutTime),
             source: record.source ?? "Trainer self-scan",
@@ -226,6 +234,8 @@ export async function GET(request: Request) {
           memberName: member.fullName,
           time: formatTimeInTimezone(new Date(record.checkInTime), tz),
           checkInTime: new Date(record.checkInTime).toISOString(),
+          checkOutTime: checkOutIso,
+          checkOutFormatted,
           membershipStatus: memberStatusById.get(id) ?? "Expired",
           checkedOut: record.status === "checked-out" || Boolean(record.checkOutTime),
           source: record.source ?? "Front desk",
@@ -285,22 +295,17 @@ export async function POST(request: NextRequest) {
       ),
     ]);
 
-    const isSelfScanRequest =
-      input.action !== "checkout" &&
-      (input.source === "Member self-scan" ||
+    const isMobileSelfAction =
+      !staffContext &&
+      (Boolean(mobileSession) ||
+        input.source === "Member self-scan" ||
         input.source === "Trainer self-scan" ||
-        typeof input.gymQrPayload === "string" ||
-        (!staffContext && Boolean(mobileSession)));
+        typeof input.gymQrPayload === "string");
+
+    const isSelfScanRequest = input.action !== "checkout" && isMobileSelfAction;
 
     if (input.action === "checkout") {
-      if (!staffContext) {
-        if (mobileSession) {
-          return memberApiResponse(
-            request,
-            { error: "Only gym staff can check out attendees." },
-            403,
-          );
-        }
+      if (!staffContext && !mobileSession) {
         const staffCheck = await requireStaffContext(request, input);
         if (staffCheck.response) return staffCheck.response;
       }
@@ -325,7 +330,7 @@ export async function POST(request: NextRequest) {
 
     // Resolve authoritative gymId from live DB state (never trusting client gymId or stale login-time gymId)
     let gymId: Types.ObjectId | null = null;
-    if (isSelfScanRequest && mobileSession) {
+    if (isMobileSelfAction && mobileSession) {
       if (mobileSession.role === "member") {
         if (!Types.ObjectId.isValid(mobileSession.memberId)) {
           return memberApiResponse(request, { error: "Invalid member session." }, 401);
@@ -420,19 +425,86 @@ export async function POST(request: NextRequest) {
     const tz = gym.timezone || "Africa/Cairo";
 
     if (input.action === "checkout") {
+      const now = new Date();
+
+      // Mobile Member / Trainer self-checkout (strictly scoped to their own check-in in their own gym)
+      if (!staffContext && mobileSession) {
+        const rawCheckInId =
+          typeof input.checkInId === "string" ? input.checkInId.trim() : "";
+        if (rawCheckInId && !Types.ObjectId.isValid(rawCheckInId)) {
+          return memberApiResponse(request, { error: "A valid checkInId is required." }, 400);
+        }
+
+        if (rawCheckInId) {
+          const target = await AttendanceModel.findById(rawCheckInId).select(
+            "gymId memberId trainerId attendeeType status",
+          );
+          if (!target) {
+            return memberApiResponse(request, { error: "Active check-in was not found." }, 404);
+          }
+          const ownsRecord =
+            String(target.gymId) === gymId.toString() &&
+            (mobileSession.role === "trainer"
+              ? Boolean(target.trainerId && String(target.trainerId) === mobileSession.trainerId)
+              : Boolean(target.memberId && String(target.memberId) === mobileSession.memberId));
+          if (!ownsRecord) {
+            return memberApiResponse(
+              request,
+              { error: "Access denied: you may only check out your own gym visit." },
+              403,
+            );
+          }
+        }
+
+        const selfQuery: Record<string, unknown> = {
+          gymId,
+          status: "checked-in",
+          ...(rawCheckInId ? { _id: rawCheckInId } : {}),
+          ...(mobileSession.role === "trainer"
+            ? { trainerId: new Types.ObjectId(mobileSession.trainerId) }
+            : { memberId: new Types.ObjectId(mobileSession.memberId) }),
+        };
+
+        const selfAttendance = await AttendanceModel.findOneAndUpdate(
+          selfQuery,
+          { $set: { status: "checked-out", checkOutTime: now } },
+          { new: true, sort: { checkInTime: -1 } },
+        );
+        if (!selfAttendance) {
+          return memberApiResponse(
+            request,
+            { error: "You are not currently checked in." },
+            404,
+          );
+        }
+        const occupancy = await AttendanceModel.countDocuments({ gymId, status: "checked-in" });
+        return memberApiResponse(request, {
+          checkInId: selfAttendance._id.toString(),
+          checkOutTime: now.toISOString(),
+          checkOutFormatted: formatTimeInTimezone(now, tz),
+          occupancy,
+        });
+      }
+
+      // Staff front-desk checkout
       if (typeof input.checkInId !== "string" || !Types.ObjectId.isValid(input.checkInId)) {
         return memberApiResponse(request, { error: "A valid checkInId is required." }, 400);
       }
       const attendance = await AttendanceModel.findOneAndUpdate(
         { _id: input.checkInId, gymId, status: "checked-in" },
-        { $set: { status: "checked-out", checkOutTime: new Date() } },
+        { $set: { status: "checked-out", checkOutTime: now } },
         { new: true },
       );
       if (!attendance) {
         return memberApiResponse(request, { error: "Active check-in was not found." }, 404);
       }
       const occupancy = await AttendanceModel.countDocuments({ gymId, status: "checked-in" });
-      return memberApiResponse(request, { checkInId: attendance._id.toString(), occupancy });
+      return memberApiResponse(request, {
+        checkInId: attendance._id.toString(),
+        checkOutTime: now.toISOString(),
+        checkOutFormatted: formatTimeInTimezone(now, tz),
+        occupancy,
+      });
     }
 
     if (input.action !== "checkin") {

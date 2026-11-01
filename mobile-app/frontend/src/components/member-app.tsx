@@ -116,6 +116,9 @@ type MemberProfile = {
   expiryDate: string | null;
   paymentStatus: string;
   enrolledInGym?: boolean;
+  checkedInNow?: boolean;
+  activeCheckInId?: string | null;
+  checkedInAt?: string | null;
 };
 
 type WorkoutExercise = {
@@ -168,7 +171,13 @@ type PortalResponse = {
   workoutPlan?: WorkoutPlan | null;
   pendingWorkoutPlan?: PendingWorkoutOffer | null;
   upcomingSessions?: UpcomingMemberSession[];
-  visits?: Array<{ id: string; checkInTime: string; source: string }>;
+  visits?: Array<{
+    id: string;
+    checkInTime: string;
+    checkOutTime?: string | null;
+    checkedOut?: boolean;
+    source: string;
+  }>;
   error?: string;
 };
 
@@ -178,7 +187,13 @@ type TrainerPortalResponse = {
   trainees?: TraineeSummary[];
   sessions?: TrainerSessionItem[];
   workoutPlans?: WorkoutPlanSummary[];
-  visits?: Array<{ id: string; checkInTime: string; source: string }>;
+  visits?: Array<{
+    id: string;
+    checkInTime: string;
+    checkOutTime?: string | null;
+    checkedOut?: boolean;
+    source: string;
+  }>;
   error?: string;
 };
 
@@ -204,7 +219,12 @@ function formatSessionDateTime(iso: string) {
   }).format(dt);
 }
 
-function formatVisit(value: string, id: string, source: string): FormattedVisit {
+function formatVisit(
+  value: string,
+  id: string,
+  source: string,
+  checkOutTime?: string | null,
+): FormattedVisit {
   const date = new Date(value);
   const today = new Date();
   const yesterday = new Date(today);
@@ -218,14 +238,26 @@ function formatVisit(value: string, id: string, source: string): FormattedVisit 
     : isSameDay(date, yesterday)
       ? "Yesterday"
       : new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short" }).format(date);
+  const baseSource =
+    source === "Member self-scan" || source === "Trainer self-scan"
+      ? "QR self-scan"
+      : "Front desk";
+  const checkOutDate = checkOutTime ? new Date(checkOutTime) : null;
+  const checkOutLabel =
+    checkOutDate && !Number.isNaN(checkOutDate.getTime())
+      ? `Checked out ${new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(checkOutDate)}`
+      : null;
   return {
     id,
     date: dateLabel,
     time: new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(date),
-    detail:
-      source === "Member self-scan" || source === "Trainer self-scan"
-        ? "Gym floor · QR self-scan"
-        : "Gym floor · Front desk",
+    detail: checkOutLabel
+      ? `${baseSource} · ${checkOutLabel}`
+      : `Gym floor · ${baseSource}`,
+    checkedOut: Boolean(checkOutLabel),
   };
 }
 
@@ -1209,7 +1241,9 @@ export function MemberApp() {
     setTrainerSessions(data.sessions ?? []);
     setGymWorkoutPlans(data.workoutPlans ?? []);
     setTrainerVisits(
-      (data.visits ?? []).map((v) => formatVisit(v.checkInTime, v.id, v.source)),
+      (data.visits ?? []).map((v) =>
+        formatVisit(v.checkInTime, v.id, v.source, v.checkOutTime),
+      ),
     );
     setAuthStatus("authenticated");
     return true;
@@ -1319,7 +1353,7 @@ export function MemberApp() {
       setUpcomingMemberSessions(data.upcomingSessions ?? []);
       setRecentVisits(
         (data.visits ?? []).map((visit) =>
-          formatVisit(visit.checkInTime, visit.id, visit.source),
+          formatVisit(visit.checkInTime, visit.id, visit.source, visit.checkOutTime),
         ),
       );
       if (isEnrolled) {
@@ -1344,11 +1378,20 @@ export function MemberApp() {
   }, [loadMobilePortal]);
 
   // Live poll while a new member is waiting for gym staff to click Accept on their subscription
+  const hadPendingRequestRef = useRef(false);
   const isAwaitingStaffAccept =
     authStatus === "authenticated" &&
     accountRole === "member" &&
     !member?.enrolledInGym &&
     Boolean(pendingRequest);
+
+  useEffect(() => {
+    if (pendingRequest) {
+      hadPendingRequestRef.current = true;
+    } else if (member?.enrolledInGym) {
+      hadPendingRequestRef.current = false;
+    }
+  }, [pendingRequest, member?.enrolledInGym]);
 
   useEffect(() => {
     if (!isAwaitingStaffAccept) return;
@@ -1357,6 +1400,30 @@ export function MemberApp() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [isAwaitingStaffAccept, loadMobilePortal]);
+
+  // Safety re-verification: if pendingRequest just cleared while enrolledInGym hasn't hydrated yet,
+  // re-poll immediately so staff acceptance transitions straight into the enrolled pass on the first try.
+  useEffect(() => {
+    if (
+      authStatus === "authenticated" &&
+      accountRole === "member" &&
+      !member?.enrolledInGym &&
+      !pendingRequest &&
+      hadPendingRequestRef.current
+    ) {
+      const t1 = window.setTimeout(() => {
+        void loadMobilePortal();
+      }, 800);
+      const t2 = window.setTimeout(() => {
+        hadPendingRequestRef.current = false;
+        void loadMobilePortal();
+      }, 2200);
+      return () => {
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+      };
+    }
+  }, [authStatus, accountRole, member?.enrolledInGym, pendingRequest, loadMobilePortal]);
 
   // Background refresh for enrolled members so staff-assigned workout routine prompts appear live
   const isEnrolledMemberView =
@@ -1467,6 +1534,7 @@ export function MemberApp() {
             };
             plans?: GymPlanOption[];
             paymentMethods?: Array<"Cash" | "Card" | "Instapay">;
+            alreadyEnrolled?: boolean;
           }>(
             response,
             "Invalid QR code. Scan the QR code displayed at your gym's reception desk.",
@@ -1475,6 +1543,12 @@ export function MemberApp() {
             throw new Error(
               data.error ?? "Invalid QR code. Scan the QR code displayed at your gym's reception desk.",
             );
+          }
+          if (data.alreadyEnrolled) {
+            setConnectedGym(null);
+            setIsScannerOpen(false);
+            await loadMobilePortal();
+            return;
           }
           setConnectedGym({
             ...data.gym,
@@ -1545,10 +1619,29 @@ export function MemberApp() {
           setTrainerVisits((curr) =>
             [visit, ...curr.filter((item) => item.id !== visit.id)].slice(0, 20),
           );
-          setTrainerProfile((curr) => (curr ? { ...curr, checkedInNow: true } : curr));
+          setTrainerProfile((curr) =>
+            curr
+              ? {
+                  ...curr,
+                  checkedInNow: true,
+                  activeCheckInId: data.checkIn!.id,
+                  checkedInAt: data.checkIn!.checkInTime,
+                }
+              : curr,
+          );
         } else {
           setRecentVisits((curr) =>
             [visit, ...curr.filter((item) => item.id !== visit.id)].slice(0, 20),
+          );
+          setMember((curr) =>
+            curr
+              ? {
+                  ...curr,
+                  checkedInNow: true,
+                  activeCheckInId: data.checkIn!.id,
+                  checkedInAt: data.checkIn!.checkInTime,
+                }
+              : curr,
           );
         }
         setCheckInSuccess(true);
@@ -1561,8 +1654,81 @@ export function MemberApp() {
         setIsCheckingIn(false);
       }
     },
-    [accountRole, member, scannerPurpose, stopScanner, trainerProfile],
+    [accountRole, loadMobilePortal, member, scannerPurpose, stopScanner, trainerProfile],
   );
+
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+
+  const handleSelfCheckout = useCallback(async () => {
+    const isTrainerMode = accountRole === "trainer";
+    const activeCheckInId = isTrainerMode
+      ? trainerProfile?.activeCheckInId
+      : member?.activeCheckInId;
+
+    setIsCheckingOut(true);
+    setDataError("");
+    try {
+      const response = await mobileFetch("/api/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "checkout",
+          ...(activeCheckInId ? { checkInId: activeCheckInId } : {}),
+        }),
+      });
+      if (response.status === 401) {
+        clearMobileSessionToken();
+        setAuthStatus("unauthenticated");
+        return;
+      }
+      const data = await readMobileJson<{
+        error?: string;
+        checkInId?: string;
+        checkOutTime?: string;
+      }>(response, "Check-out could not be completed.");
+      if (!response.ok) {
+        throw new Error(data.error ?? "Check-out could not be completed.");
+      }
+
+      if (isTrainerMode) {
+        setTrainerProfile((curr) =>
+          curr
+            ? {
+                ...curr,
+                checkedInNow: false,
+                activeCheckInId: null,
+                checkedInAt: null,
+              }
+            : curr,
+        );
+        await loadTrainerPortal();
+      } else {
+        setMember((curr) =>
+          curr
+            ? {
+                ...curr,
+                checkedInNow: false,
+                activeCheckInId: null,
+                checkedInAt: null,
+              }
+            : curr,
+        );
+        await loadMobilePortal();
+      }
+    } catch (error) {
+      setDataError(
+        error instanceof Error ? error.message : "Check-out could not be completed.",
+      );
+    } finally {
+      setIsCheckingOut(false);
+    }
+  }, [
+    accountRole,
+    loadMobilePortal,
+    loadTrainerPortal,
+    member?.activeCheckInId,
+    trainerProfile?.activeCheckInId,
+  ]);
 
   useEffect(() => {
     if (!isScannerOpen || checkInSuccess) {
@@ -1961,7 +2127,9 @@ export function MemberApp() {
           visits={trainerVisits}
           dataError={dataError}
           isLoggingOut={isLoggingOut}
+          isCheckingOut={isCheckingOut}
           onOpenScanner={openQrScanner}
+          onCheckout={handleSelfCheckout}
           onRefresh={loadTrainerPortal}
           onLogout={handleLogout}
         />
@@ -2159,7 +2327,113 @@ export function MemberApp() {
 
           {activeTab === "Pass" && (
             <div className="space-y-4">
-              {/* 1. TODAY'S WORKOUT / REST DAY HERO (Prioritized Start Workout) */}
+              {/* 1. PROMINENT TOP GYM CHECK-IN / LIVE FLOOR STATUS & DIGITAL PASS */}
+              <section
+                data-tour-id="tour-digital-pass"
+                aria-labelledby="digital-pass-heading"
+                className={
+                  member?.checkedInNow
+                    ? "rounded-2xl border border-accent-border bg-accent-soft p-4"
+                    : `${ui.cardElevated} p-4`
+                }
+              >
+                {!member?.checkedInNow ? (
+                  <>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <span className={ui.badgeAccent}>
+                          <QrCode size={11} aria-hidden="true" />
+                          Digital member pass
+                        </span>
+                        <h2
+                          id="digital-pass-heading"
+                          className="mt-2 truncate text-[16px] font-bold tracking-[-0.025em] text-ink"
+                        >
+                          Check in to {member?.gymName ?? "your gym"}
+                        </h2>
+                        <p className="mt-0.5 text-[11px] text-ink-secondary">
+                          {member?.planName ?? "No active plan"}
+                          {member?.expiryDate
+                            ? ` · Valid through ${formatMemberDate(member.expiryDate)}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-lg border border-line bg-surface px-2 py-1 font-mono text-[9px] text-ink-muted">
+                        {member?.id.slice(-8).toUpperCase() ?? "—"}
+                      </span>
+                    </div>
+
+                    {member?.status === "Unpaid" && (
+                      <div
+                        role="alert"
+                        className="mt-3 flex items-start gap-2.5 rounded-xl border border-warning-border bg-warning-soft p-3"
+                      >
+                        <Wallet
+                          size={15}
+                          className="mt-0.5 shrink-0 text-warning-text"
+                          aria-hidden="true"
+                        />
+                        <div>
+                          <p className="text-[10px] font-semibold text-warning-text">
+                            Payment needs attention
+                          </p>
+                          <p className="mt-0.5 text-[10px] leading-4 text-ink-secondary">
+                            Latest payment status: {member.paymentStatus}. Please check with the front
+                            desk.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={openQrScanner}
+                      className={`${ui.btnPrimary} mt-3.5 flex min-h-12 w-full rounded-xl px-4 text-[13px]`}
+                    >
+                      <ScanLine size={18} aria-hidden="true" />
+                      Scan Gym QR Code
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="size-2 rounded-full bg-accent" aria-hidden="true" />
+                        <h2
+                          id="digital-pass-heading"
+                          className="truncate text-[13px] font-semibold text-accent-text"
+                        >
+                          Checked in at {member.gymName ?? "Gym"}
+                        </h2>
+                      </div>
+                      <p className="mt-0.5 text-[10px] text-ink-secondary">
+                        {member.checkedInAt
+                          ? `Since ${new Intl.DateTimeFormat("en-US", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            }).format(new Date(member.checkedInAt))} · `
+                          : ""}
+                        {member.planName}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleSelfCheckout()}
+                      disabled={isCheckingOut}
+                      className={`${ui.btnSecondary} min-h-10 rounded-xl px-3.5 text-[11px]`}
+                    >
+                      {isCheckingOut ? (
+                        <LoaderCircle size={14} className="animate-spin" aria-hidden="true" />
+                      ) : (
+                        <LogOut size={14} aria-hidden="true" />
+                      )}
+                      {isCheckingOut ? "Checking out..." : "Check Out"}
+                    </button>
+                  </div>
+                )}
+              </section>
+
+              {/* 2. TODAY'S WORKOUT / REST DAY HERO (Prioritized Start Workout) */}
               <section
                 data-tour-id="tour-home-hero"
                 aria-label="Today's workout"
@@ -2595,66 +2869,6 @@ export function MemberApp() {
                     Build a custom weekly split or follow a gym workout plan.
                   </p>
                 )}
-              </section>
-
-              {/* 6. GYM CHECK-IN & DIGITAL PASS */}
-              <section
-                data-tour-id="tour-digital-pass"
-                aria-labelledby="digital-pass-heading"
-                className={`${ui.card} p-4`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-accent-text">
-                      Digital member pass
-                    </p>
-                    <h2
-                      id="digital-pass-heading"
-                      className="mt-0.5 truncate text-[14px] font-semibold text-ink"
-                    >
-                      {member?.planName ?? "No active plan"}
-                    </h2>
-                    <p className="mt-0.5 text-[10px] text-ink-secondary">
-                      {member?.expiryDate
-                        ? `Valid through ${formatMemberDate(member.expiryDate)}`
-                        : "Visit the front desk to activate a membership plan."}
-                    </p>
-                  </div>
-                  <span className="shrink-0 font-mono text-[10px] text-ink-muted">
-                    {member?.id.slice(-8).toUpperCase() ?? "—"}
-                  </span>
-                </div>
-
-                {member?.status === "Unpaid" && (
-                  <div
-                    role="alert"
-                    className="mt-3 flex items-start gap-2.5 rounded-xl border border-warning-border bg-warning-soft p-3"
-                  >
-                    <Wallet
-                      size={15}
-                      className="mt-0.5 shrink-0 text-warning-text"
-                      aria-hidden="true"
-                    />
-                    <div>
-                      <p className="text-[10px] font-semibold text-warning-text">
-                        Payment needs attention
-                      </p>
-                      <p className="mt-0.5 text-[10px] leading-4 text-ink-secondary">
-                        Latest payment status: {member.paymentStatus}. Please check with the front
-                        desk.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={openQrScanner}
-                  className={`${ui.btnSecondary} mt-3.5 flex min-h-11 w-full rounded-xl px-4 text-[12px]`}
-                >
-                  <ScanLine size={17} className="text-accent-text" aria-hidden="true" />
-                  Scan Gym QR Code
-                </button>
               </section>
 
               {upcomingMemberSessions.length > 0 && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, Sparkles, X } from "lucide-react";
 import { ui } from "@/lib/theme";
 
@@ -17,22 +17,22 @@ type TutorialStep = {
 
 const TUTORIAL_STEPS: TutorialStep[] = [
   {
-    id: "home",
-    tab: "Pass",
-    targetTourId: "tour-home-hero",
-    badge: "Step 1 of 5",
-    title: "Home & Today's Workout",
-    description:
-      "See today's scheduled training, resume an active session, or launch a Free Workout in one tap.",
-  },
-  {
     id: "checkin",
     tab: "Pass",
     targetTourId: "tour-digital-pass",
-    badge: "Step 2 of 5",
-    title: "Digital Pass & QR Check-In",
+    badge: "Step 1 of 5",
+    title: "Gym QR Check-In & Check-Out",
     description:
-      "Check your active plan and scan the gym reception QR code whenever you arrive to log your visit.",
+      "Scan the Reception QR code right from the top of Home when you arrive, and tap Check Out when you finish.",
+  },
+  {
+    id: "home",
+    tab: "Pass",
+    targetTourId: "tour-home-hero",
+    badge: "Step 2 of 5",
+    title: "Home & Today's Workout",
+    description:
+      "See today's scheduled training, resume an active session, or launch a Free Workout in one tap.",
   },
   {
     id: "workouts",
@@ -70,6 +70,18 @@ type SpotlightRect = {
   height: number;
 };
 
+function findScrollableContainer(el: HTMLElement | null): HTMLElement | null {
+  let curr = el?.parentElement ?? null;
+  while (curr && curr !== document.body && curr !== document.documentElement) {
+    const style = window.getComputedStyle(curr);
+    if (/(auto|scroll)/.test(style.overflowY)) {
+      return curr;
+    }
+    curr = curr.parentElement;
+  }
+  return null;
+}
+
 export function MemberTutorialOverlay({
   open,
   onSelectTab,
@@ -84,6 +96,8 @@ export function MemberTutorialOverlay({
   const [stepIndex, setStepIndex] = useState(0);
   const [rect, setRect] = useState<SpotlightRect | null>(null);
   const [viewportH, setViewportH] = useState(800);
+  const [cardHeight, setCardHeight] = useState(188);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
 
   const currentStep = TUTORIAL_STEPS[stepIndex] ?? TUTORIAL_STEPS[0];
   const isLastStep = stepIndex >= TUTORIAL_STEPS.length - 1;
@@ -101,9 +115,17 @@ export function MemberTutorialOverlay({
     let rafId = 0;
     let timerId: number | null = null;
 
-    const measure = (scrollIntoViewFirst: boolean) => {
+    const measure = (alignScrollFirst: boolean) => {
       if (typeof window === "undefined") return;
-      setViewportH(window.innerHeight || 800);
+      const vh = window.innerHeight || 800;
+      const vw = window.innerWidth || 390;
+      setViewportH(vh);
+
+      const measuredCardH = tooltipRef.current?.offsetHeight;
+      if (measuredCardH && measuredCardH > 80) {
+        setCardHeight(measuredCardH);
+      }
+
       const target = document.querySelector<HTMLElement>(
         `[data-tour-id="${currentStep.targetTourId}"]`,
       );
@@ -111,16 +133,41 @@ export function MemberTutorialOverlay({
         setRect(null);
         return;
       }
-      if (scrollIntoViewFirst) {
-        target.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      const scrollContainer = findScrollableContainer(target);
+
+      // Scroll only the inner scroll container synchronously so the outer viewport never shifts
+      // and tall sections (like Step 5 Profile settings) align cleanly near the top instead of scrolling past.
+      if (alignScrollFirst && scrollContainer) {
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const targetRectBefore = target.getBoundingClientRect();
+        const desiredOffset = targetRectBefore.top - containerRect.top - 14;
+        const maxScrollTop = Math.max(
+          0,
+          scrollContainer.scrollHeight - scrollContainer.clientHeight,
+        );
+        scrollContainer.scrollTop = Math.max(
+          0,
+          Math.min(maxScrollTop, scrollContainer.scrollTop + desiredOffset),
+        );
       }
+
       const r = target.getBoundingClientRect();
+      const containerBounds = scrollContainer?.getBoundingClientRect();
+      const minVisibleTop = containerBounds ? Math.max(8, containerBounds.top + 4) : 68;
+      const maxVisibleBottom = containerBounds
+        ? Math.min(vh - 72, containerBounds.bottom - 4)
+        : vh - 76;
+
       if (r.width > 0 && r.height > 0) {
+        const clampedTop = Math.max(minVisibleTop, r.top - 4);
+        const rawBottom = Math.min(maxVisibleBottom, r.bottom + 4);
+        const clampedHeight = Math.max(48, rawBottom - clampedTop);
         setRect({
-          top: Math.max(8, r.top - 6),
-          left: Math.max(8, r.left - 6),
-          width: Math.min(window.innerWidth - 16, r.width + 12),
-          height: r.height + 12,
+          top: clampedTop,
+          left: Math.max(8, r.left - 4),
+          width: Math.min(vw - 16, r.width + 8),
+          height: clampedHeight,
         });
       } else {
         setRect(null);
@@ -129,8 +176,8 @@ export function MemberTutorialOverlay({
 
     timerId = window.setTimeout(() => {
       measure(true);
-      window.setTimeout(() => measure(false), 260);
-    }, 90);
+      window.setTimeout(() => measure(false), 120);
+    }, 60);
 
     const handleRelayout = () => {
       cancelAnimationFrame(rafId);
@@ -149,12 +196,23 @@ export function MemberTutorialOverlay({
 
   if (!open) return null;
 
-  const placeTooltipBelow = !rect || rect.top + rect.height / 2 < viewportH * 0.48;
-  const tooltipStyle = rect
-    ? placeTooltipBelow
-      ? { top: Math.min(viewportH - 220, rect.top + rect.height + 12) }
-      : { bottom: Math.max(16, viewportH - rect.top + 12) }
-    : { bottom: 92 };
+  const safeTop = 16;
+  const safeBottom = 82;
+  const maxAllowedTop = Math.max(safeTop, viewportH - cardHeight - safeBottom);
+
+  let computedTop = maxAllowedTop;
+  if (rect) {
+    const belowCandidate = rect.top + rect.height + 12;
+    const aboveCandidate = rect.top - cardHeight - 12;
+    if (belowCandidate + cardHeight <= viewportH - safeBottom) {
+      computedTop = Math.max(safeTop, belowCandidate);
+    } else if (aboveCandidate >= safeTop) {
+      computedTop = Math.min(maxAllowedTop, aboveCandidate);
+    } else {
+      // Target spans most of the screen (e.g. Step 5 Profile settings): dock cleanly inside bottom safe area
+      computedTop = maxAllowedTop;
+    }
+  }
 
   const advance = () => {
     if (isLastStep) {
@@ -170,7 +228,7 @@ export function MemberTutorialOverlay({
       role="dialog"
       aria-modal="true"
       aria-label="Member app quick guide"
-      className="fixed inset-0 z-50"
+      className="fixed inset-0 z-50 overflow-hidden"
     >
       {/* Subtle scrim */}
       <div
@@ -191,14 +249,18 @@ export function MemberTutorialOverlay({
             width: `${rect.width}px`,
             height: `${rect.height}px`,
           }}
-          className="fixed z-50 rounded-2xl border-2 border-accent ring-4 ring-accent-soft transition-all duration-200"
+          className="fixed z-50 rounded-2xl border-2 border-accent ring-4 ring-accent-soft transition-all duration-150"
         />
       )}
 
-      {/* Compact bilingual-ready tooltip card */}
+      {/* Strictly viewport-clamped bilingual tooltip card */}
       <div
-        style={tooltipStyle}
-        className="fixed inset-x-3 z-50 mx-auto max-w-[400px] rounded-2xl border border-accent-border bg-elevated p-4 shadow-2xl"
+        ref={tooltipRef}
+        style={{
+          top: `${computedTop}px`,
+          maxHeight: `${Math.max(180, viewportH - safeTop - safeBottom)}px`,
+        }}
+        className="fixed inset-x-3 z-50 mx-auto max-w-[396px] overflow-y-auto rounded-2xl border border-accent-border bg-elevated p-4 shadow-2xl"
       >
         <div className="flex items-center justify-between gap-2">
           <span className={ui.badgeAccent}>

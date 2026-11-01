@@ -151,7 +151,7 @@ export function MemberOnboardingView({
         await onRefreshPortal();
         return;
       }
-      const data = await readMobileJson<{ error?: string }>(
+      const data = await readMobileJson<{ error?: string; alreadyEnrolled?: boolean }>(
         response,
         "Unable to send your subscription request.",
       );

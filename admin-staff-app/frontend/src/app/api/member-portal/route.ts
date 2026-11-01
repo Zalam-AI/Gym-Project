@@ -152,10 +152,25 @@ export async function GET(request: NextRequest) {
       };
     }
 
-    const memberGymId =
+    let memberGymId =
       member.gymId && Types.ObjectId.isValid(String(member.gymId))
         ? new Types.ObjectId(String(member.gymId))
         : null;
+
+    // Self-heal if staff accepted a membership plan while member.gymId was not yet saved
+    if (!memberGymId) {
+      const recoveredMembership = await MembershipModel.findOne({
+        memberId: member._id,
+        status: "active",
+      }).sort({ expiryDate: -1 });
+      if (recoveredMembership?.gymId && Types.ObjectId.isValid(String(recoveredMembership.gymId))) {
+        memberGymId = new Types.ObjectId(String(recoveredMembership.gymId));
+        await MemberModel.updateOne(
+          { _id: member._id },
+          { $set: { gymId: memberGymId, status: "active" } },
+        );
+      }
+    }
 
     const membershipDoc = memberGymId
       ? await MembershipModel.findOne({ gymId: memberGymId, memberId: member._id }).sort({
@@ -232,22 +247,35 @@ export async function GET(request: NextRequest) {
       member as unknown as { pendingWorkoutAssignedBy?: string }
     ).pendingWorkoutAssignedBy;
 
-    const [latestPayment, workoutDoc, pendingWorkoutDoc, trainerDoc, visits, sessionDocs] =
-      await Promise.all([
-        PaymentModel.findOne({ gymId: memberGymId, memberId: member._id }).sort({ date: -1 }),
-        WorkoutPlanModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
-          updatedAt: -1,
-        }),
-        rawPendingPlanId && Types.ObjectId.isValid(String(rawPendingPlanId))
-          ? WorkoutPlanModel.findOne({ _id: rawPendingPlanId, gymId: memberGymId })
-          : Promise.resolve(null),
-        TrainerModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
-          updatedAt: -1,
-        }),
-        AttendanceModel.find({ gymId: memberGymId, memberId: member._id })
-          .sort({ checkInTime: -1 })
-          .limit(20),
-        TrainingSessionModel.find({
+    const [
+      latestPayment,
+      workoutDoc,
+      pendingWorkoutDoc,
+      trainerDoc,
+      visits,
+      activeCheckInDoc,
+      sessionDocs,
+    ] = await Promise.all([
+      PaymentModel.findOne({ gymId: memberGymId, memberId: member._id }).sort({ date: -1 }),
+      WorkoutPlanModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
+        updatedAt: -1,
+      }),
+      rawPendingPlanId && Types.ObjectId.isValid(String(rawPendingPlanId))
+        ? WorkoutPlanModel.findOne({ _id: rawPendingPlanId, gymId: memberGymId })
+        : Promise.resolve(null),
+      TrainerModel.findOne({ gymId: memberGymId, assignedMemberIds: member._id }).sort({
+        updatedAt: -1,
+      }),
+      AttendanceModel.find({ gymId: memberGymId, memberId: member._id })
+        .sort({ checkInTime: -1 })
+        .limit(20),
+      AttendanceModel.findOne({
+        gymId: memberGymId,
+        memberId: member._id,
+        status: "checked-in",
+        checkInTime: { $gte: today },
+      }).sort({ checkInTime: -1 }),
+      TrainingSessionModel.find({
           gymId: memberGymId,
           memberId: member._id,
           status: "scheduled",
@@ -297,6 +325,9 @@ export async function GET(request: NextRequest) {
         expiryDate: membership.expiryDate.toISOString().slice(0, 10),
         paymentStatus: latestPayment?.status ?? membership.paymentStatus ?? "Paid",
         enrolledInGym: true,
+        checkedInNow: Boolean(activeCheckInDoc),
+        activeCheckInId: activeCheckInDoc ? activeCheckInDoc._id.toString() : null,
+        checkedInAt: activeCheckInDoc ? activeCheckInDoc.checkInTime.toISOString() : null,
       },
       trainer: trainerDoc
         ? {
@@ -407,6 +438,7 @@ export async function GET(request: NextRequest) {
       visits: visits.map((visit) => ({
         id: visit._id.toString(),
         checkInTime: visit.checkInTime.toISOString(),
+        checkOutTime: visit.checkOutTime ? visit.checkOutTime.toISOString() : null,
         checkedOut: visit.status === "checked-out" || Boolean(visit.checkOutTime),
         source: visit.source ?? "Front desk",
       })),
