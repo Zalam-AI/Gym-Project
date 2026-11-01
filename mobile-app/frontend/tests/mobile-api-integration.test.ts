@@ -3083,4 +3083,35 @@ describe("GymOS Mobile Hosted Backend Integration Suite", () => {
     assert.equal(staffTrainerAfter?.checkedOut, true);
     assert.ok(staffTrainerAfter?.checkOutFormatted);
   });
+
+  it("22. Enforces soft-keyboard resize stability across Android native config, viewport meta, auth screens, and modals", () => {
+    const mobileRoot = resolve(__dirname, "..");
+    const manifestXml = readFileSync(
+      join(mobileRoot, "android/app/src/main/AndroidManifest.xml"),
+      "utf8",
+    );
+    const stylesXml = readFileSync(
+      join(mobileRoot, "android/app/src/main/res/values/styles.xml"),
+      "utf8",
+    );
+    const mainActivityJava = readFileSync(
+      join(mobileRoot, "android/app/src/main/java/com/gymos/mobile/MainActivity.java"),
+      "utf8",
+    );
+    const layoutTsx = readFileSync(join(mobileRoot, "src/app/layout.tsx"), "utf8");
+    const themeTsx = readFileSync(join(mobileRoot, "src/lib/theme.tsx"), "utf8");
+
+    assert.match(manifestXml, /android:windowSoftInputMode="adjustResize"/);
+    assert.doesNotMatch(manifestXml, /adjustPan/);
+    assert.match(stylesXml, /<item name="android:windowSoftInputMode">adjustResize<\/item>/);
+    assert.match(mainActivityJava, /SOFT_INPUT_ADJUST_RESIZE/);
+    assert.doesNotMatch(
+      mainActivityJava,
+      /setOnApplyWindowInsetsListener/,
+      "MainActivity must not stack a duplicate WindowInsets listener on top of Capacitor 8 SystemBars",
+    );
+    assert.match(layoutTsx, /interactiveWidget:\s*"resizes-content"/);
+    assert.match(themeTsx, /authFrame:\s*"[^"]*h-full max-h-full[^"]*overflow-hidden/);
+    assert.match(themeTsx, /modalCard:\s*"[^"]*max-h-\[calc\(100%-24px\)\][^"]*overflow-y-auto/);
+  });
 });

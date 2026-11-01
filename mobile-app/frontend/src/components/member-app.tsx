@@ -589,8 +589,8 @@ function MobileAuthScreen({
           </div>
         </header>
 
-        <div className="flex flex-1 items-center overflow-y-auto px-5 py-6">
-          <div className="w-full">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 py-6">
+          <div className="my-auto w-full pb-3">
             <div className="mb-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
                 GymOS Mobile
@@ -1930,9 +1930,9 @@ export function MemberApp() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="scanner-title"
-        className={`${ui.modalCard} max-w-[390px] overflow-hidden`}
+        className={`${ui.modalCard} flex max-h-[calc(100%-24px)] max-w-[390px] flex-col overflow-hidden`}
       >
-        <header className="flex items-center justify-between border-b border-divider px-5 py-4">
+        <header className="flex shrink-0 items-center justify-between border-b border-divider px-5 py-4">
           <div>
             <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-ink-muted">
               {scannerPurpose === "join-gym" ? "Connect to Gym" : "GymOS Check-in"}
@@ -1955,7 +1955,7 @@ export function MemberApp() {
           </button>
         </header>
 
-        <div className="p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
           {checkInSuccess ? (
             <div className="py-3 text-center">
               <span className="check-in-success-mark mx-auto grid size-18 place-items-center rounded-full border border-accent-border bg-accent-soft text-accent-text">

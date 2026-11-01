@@ -94,15 +94,15 @@ export const THEME_TOKENS: Record<ResolvedTheme, SemanticThemeTokens> = {
  */
 export const ui = {
   pageCanvas:
-    "flex h-[100dvh] max-h-[100dvh] w-full items-center justify-center overflow-hidden bg-canvas px-0 py-0 md:px-6 md:py-6",
+    "flex h-full max-h-full w-full items-center justify-center overflow-hidden bg-canvas px-0 py-0 md:px-6 md:py-6",
   appFrame:
-    "relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-app text-ink md:h-[min(860px,calc(100dvh-48px))] md:max-w-[420px] md:rounded-3xl md:border md:border-line",
+    "relative flex h-full max-h-full w-full flex-col overflow-hidden bg-app text-ink md:h-[min(860px,calc(100%-48px))] md:max-w-[420px] md:rounded-3xl md:border md:border-line",
   authFrame:
-    "relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-y-auto bg-app text-ink md:h-auto md:min-h-[720px] md:max-h-[calc(100dvh-48px)] md:max-w-[420px] md:rounded-3xl md:border md:border-line",
+    "relative flex h-full max-h-full w-full flex-col overflow-hidden bg-app text-ink md:h-[min(780px,calc(100%-48px))] md:max-w-[420px] md:rounded-3xl md:border md:border-line",
   appHeader:
     "flex min-h-[68px] shrink-0 items-center justify-between border-b border-line bg-surface px-4 pt-[max(env(safe-area-inset-top),8px)] pb-2",
   bottomNav:
-    "shrink-0 border-t border-line bg-surface pb-[max(env(safe-area-inset-bottom),8px)] pt-2",
+    "mobile-bottom-nav shrink-0 border-t border-line bg-surface pb-[max(env(safe-area-inset-bottom),8px)] pt-2",
   card: "rounded-2xl border border-line bg-surface",
   cardInteractive:
     "rounded-2xl border border-line bg-surface transition-colors hover:bg-hover",
@@ -134,11 +134,11 @@ export const ui = {
     "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-danger-border bg-danger-soft px-2.5 py-0.5 text-[9px] font-semibold text-danger-text",
   segmentedTrack: "rounded-2xl border border-line bg-subtle p-1",
   modalBackdrop:
-    "fixed inset-0 z-50 flex items-center justify-center bg-backdrop p-4 backdrop-blur-xs",
+    "fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-backdrop p-3 backdrop-blur-xs sm:items-center sm:p-4",
   modalSheetBackdrop:
     "fixed inset-0 z-50 flex items-end justify-center bg-backdrop p-0 backdrop-blur-xs sm:items-center sm:p-4",
   modalCard:
-    "w-full rounded-[24px] border border-line-strong bg-elevated text-ink shadow-2xl",
+    "my-auto max-h-[calc(100%-24px)] w-full overflow-y-auto overscroll-contain rounded-[24px] border border-line-strong bg-elevated text-ink shadow-2xl",
 } as const;
 
 export function isValidThemePreference(value: unknown): value is ThemePreference {
@@ -243,6 +243,140 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyResolvedThemeToDom(resolvedTheme);
   }, [resolvedTheme]);
+
+  // Global mobile soft-keyboard stabilization across all screens & modals:
+  // 1) Prevents document/window upward panning by keeping root scroll locked at (0, 0).
+  // 2) Marks html[data-keyboard-open="true"] while typing so mobile bottom nav hides cleanly.
+  // 3) Scrolls ONLY the nearest inner overflow-y scroll container so the focused field stays visible.
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+
+    const NON_TEXT_INPUT_TYPES = new Set([
+      "button",
+      "checkbox",
+      "color",
+      "file",
+      "hidden",
+      "image",
+      "radio",
+      "range",
+      "reset",
+      "submit",
+    ]);
+
+    const isTextEntry = (el: Element | null): el is HTMLElement => {
+      if (!el || !(el instanceof HTMLElement)) return false;
+      if (el.tagName === "TEXTAREA") return true;
+      if (el.tagName === "INPUT") {
+        const type = ((el as HTMLInputElement).type || "text").toLowerCase();
+        return !NON_TEXT_INPUT_TYPES.has(type);
+      }
+      return el.isContentEditable;
+    };
+
+    const findScrollParent = (el: HTMLElement): HTMLElement | null => {
+      let curr = el.parentElement;
+      while (curr && curr !== document.body && curr !== document.documentElement) {
+        const oy = window.getComputedStyle(curr).overflowY;
+        if (oy === "auto" || oy === "scroll") {
+          return curr;
+        }
+        curr = curr.parentElement;
+      }
+      return null;
+    };
+
+    const ensureFocusedVisibleInContainer = () => {
+      if (window.scrollY !== 0 || window.scrollX !== 0) {
+        window.scrollTo(0, 0);
+      }
+      const active = document.activeElement;
+      if (!isTextEntry(active)) return;
+      const container = findScrollParent(active);
+      if (!container) return;
+
+      const cRect = container.getBoundingClientRect();
+      const elRect = active.getBoundingClientRect();
+      const topMargin = 20;
+      const bottomMargin = 28;
+
+      if (elRect.bottom > cRect.bottom - bottomMargin) {
+        const delta = elRect.bottom - (cRect.bottom - bottomMargin);
+        container.scrollBy({ top: delta, behavior: "smooth" });
+      } else if (elRect.top < cRect.top + topMargin) {
+        const delta = elRect.top - (cRect.top + topMargin);
+        container.scrollBy({ top: delta, behavior: "smooth" });
+      }
+    };
+
+    let blurTimer: number | null = null;
+    let t1: number | null = null;
+    let t2: number | null = null;
+
+    const clearTimers = () => {
+      if (t1 !== null) window.clearTimeout(t1);
+      if (t2 !== null) window.clearTimeout(t2);
+      t1 = null;
+      t2 = null;
+    };
+
+    const handleFocusIn = (e: FocusEvent) => {
+      const target = e.target as Element | null;
+      if (!isTextEntry(target)) return;
+      if (blurTimer !== null) {
+        window.clearTimeout(blurTimer);
+        blurTimer = null;
+      }
+      document.documentElement.setAttribute("data-keyboard-open", "true");
+      if (window.scrollY !== 0 || window.scrollX !== 0) {
+        window.scrollTo(0, 0);
+      }
+      clearTimers();
+      t1 = window.setTimeout(ensureFocusedVisibleInContainer, 120);
+      t2 = window.setTimeout(ensureFocusedVisibleInContainer, 300);
+    };
+
+    const handleFocusOut = () => {
+      if (blurTimer !== null) window.clearTimeout(blurTimer);
+      blurTimer = window.setTimeout(() => {
+        if (!isTextEntry(document.activeElement)) {
+          document.documentElement.removeAttribute("data-keyboard-open");
+        }
+        if (window.scrollY !== 0 || window.scrollX !== 0) {
+          window.scrollTo(0, 0);
+        }
+      }, 90);
+    };
+
+    const handleWindowScroll = () => {
+      if (window.scrollY !== 0 || window.scrollX !== 0) {
+        window.scrollTo(0, 0);
+      }
+    };
+
+    const handleViewportResize = () => {
+      if (isTextEntry(document.activeElement)) {
+        ensureFocusedVisibleInContainer();
+      }
+    };
+
+    document.addEventListener("focusin", handleFocusIn, true);
+    document.addEventListener("focusout", handleFocusOut, true);
+    window.addEventListener("scroll", handleWindowScroll, { passive: true });
+    window.addEventListener("resize", handleViewportResize, { passive: true });
+    window.visualViewport?.addEventListener("resize", handleViewportResize);
+
+    return () => {
+      clearTimers();
+      if (blurTimer !== null) window.clearTimeout(blurTimer);
+      document.documentElement.removeAttribute("data-keyboard-open");
+      document.removeEventListener("focusin", handleFocusIn, true);
+      document.removeEventListener("focusout", handleFocusOut, true);
+      window.removeEventListener("scroll", handleWindowScroll);
+      window.removeEventListener("resize", handleViewportResize);
+      window.visualViewport?.removeEventListener("resize", handleViewportResize);
+    };
+  }, []);
 
   const setPreference = useCallback(
     (next: ThemePreference) => {

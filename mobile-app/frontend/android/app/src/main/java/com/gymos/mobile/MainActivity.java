@@ -2,11 +2,8 @@ package com.gymos.mobile;
 
 import android.graphics.Color;
 import android.os.Bundle;
-import android.view.View;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
+import android.view.WindowManager;
 import androidx.core.view.WindowCompat;
-import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -15,23 +12,11 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(GymOSRestFeedbackPlugin.class);
         super.onCreate(savedInstanceState);
 
+        // Enforce SOFT_INPUT_ADJUST_RESIZE so Android never pans/translates the whole window
+        // upward when an <input> inside the WebView is focused, while letting Capacitor 8's
+        // built-in SystemBars listener on decorView handle systemBars + cutout + IME padding once.
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         getWindow().getDecorView().setBackgroundColor(Color.parseColor("#121417"));
-
-        final View contentView = findViewById(android.R.id.content);
-        if (contentView != null) {
-            contentView.setBackgroundColor(Color.parseColor("#121417"));
-            ViewCompat.setOnApplyWindowInsetsListener(contentView, (view, windowInsets) -> {
-                Insets insets = windowInsets.getInsets(
-                    WindowInsetsCompat.Type.systemBars()
-                        | WindowInsetsCompat.Type.displayCutout()
-                        | WindowInsetsCompat.Type.ime()
-                );
-                view.setPadding(insets.left, insets.top, insets.right, insets.bottom);
-                return WindowInsetsCompat.CONSUMED;
-            });
-            ViewCompat.requestApplyInsets(contentView);
-        }
     }
 }
-

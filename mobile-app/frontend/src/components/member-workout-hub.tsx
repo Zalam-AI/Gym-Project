@@ -3203,7 +3203,7 @@ export function MemberWorkoutHub({
             role="dialog"
             aria-modal="true"
             aria-labelledby="routine-builder-title"
-            className="flex max-h-[92dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+            className="flex max-h-[94%] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
           >
             <header className="flex items-center justify-between border-b border-divider px-5 py-4">
               <div>
@@ -3895,7 +3895,7 @@ export function MemberWorkoutHub({
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="exercise-selector-title"
-                className="flex max-h-[88dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+                className="flex max-h-[92%] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
               >
                 <header className="flex items-center justify-between border-b border-divider px-5 py-3.5">
                   <div>
@@ -4081,7 +4081,7 @@ export function MemberWorkoutHub({
             role="dialog"
             aria-modal="true"
             aria-labelledby="workout-entry-title"
-            className="flex max-h-[88dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+            className="flex max-h-[92%] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
           >
             <header className="flex items-center justify-between border-b border-divider px-5 py-4">
               <div>
@@ -4396,7 +4396,7 @@ export function MemberWorkoutHub({
             role="dialog"
             aria-modal="true"
             aria-labelledby="exercise-library-modal-title"
-            className="flex max-h-[88dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+            className="flex max-h-[92%] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
           >
             <header className="flex items-center justify-between border-b border-divider px-5 py-3.5">
               <div>

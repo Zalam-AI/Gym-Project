@@ -2619,7 +2619,7 @@ export function ActiveWorkoutPlayer({
             role="dialog"
             aria-modal="true"
             aria-labelledby="add-session-exercise-title"
-            className="flex max-h-[85dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+            className="flex max-h-[92%] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
           >
             <header className="flex items-center justify-between border-b border-divider px-5 py-3.5">
               <div>
@@ -3133,7 +3133,7 @@ export function ActiveWorkoutPlayer({
             role="dialog"
             aria-modal="true"
             aria-labelledby="inline-exercise-history-title"
-            className="flex max-h-[82dvh] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
+            className="flex max-h-[88%] w-full max-w-[430px] flex-col overflow-hidden rounded-t-[26px] border border-line-strong bg-elevated text-ink shadow-2xl sm:rounded-[26px]"
           >
             <header className="flex items-center justify-between border-b border-divider px-5 py-3.5">
               <div className="min-w-0">
