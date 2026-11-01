@@ -15,7 +15,12 @@ import MembershipModel from "gymos-admin-backend/models/membership";
 import PaymentModel from "gymos-admin-backend/models/payment";
 import TrainerModel from "gymos-admin-backend/models/trainer";
 import { requireStaffContext, resolveStaffContext } from "@/lib/gym-context";
-import { isAllowedMemberOrigin, memberApiOptions, memberApiResponse } from "@/lib/member-auth";
+import {
+  isAllowedMemberOrigin,
+  matchesGymQrOrCode,
+  memberApiOptions,
+  memberApiResponse,
+} from "@/lib/member-auth";
 import {
   getMemberTokenFromRequest,
   MEMBER_SESSION_COOKIE,
@@ -391,12 +396,18 @@ export async function POST(request: NextRequest) {
     const gym = await GymModel.findOne({
       _id: gymId,
       status: "active",
-    }).select("name slug capacity timezone");
+    }).select("name slug subdomain capacity timezone");
     if (!gym) {
       return memberApiResponse(request, { error: "Gym workspace is unavailable." }, 403);
     }
 
-    if (hasConflictingGymRef(request, { id: gymId.toString(), slug: gym.slug }, input)) {
+    if (
+      hasConflictingGymRef(
+        request,
+        { id: gymId.toString(), slug: gym.slug, subdomain: gym.subdomain },
+        input,
+      )
+    ) {
       return memberApiResponse(
         request,
         { error: "Cross-gym access denied: requested gymId does not match your authorized gym." },
@@ -431,11 +442,11 @@ export async function POST(request: NextRequest) {
     if (isSelfScanRequest && mobileSession) {
       const scannedPayload =
         typeof input.gymQrPayload === "string" ? input.gymQrPayload.trim() : "";
-      const expectedPayload = `GYMOS-GYM:${gymId.toString()}`;
-      const matchesPayload =
-        scannedPayload === expectedPayload ||
-        scannedPayload.toLowerCase() === gym.slug.toLowerCase() ||
-        scannedPayload === gymId.toString();
+      const matchesPayload = matchesGymQrOrCode(scannedPayload, {
+        id: gymId.toString(),
+        slug: gym.slug,
+        subdomain: gym.subdomain,
+      });
       if (!matchesPayload) {
         return memberApiResponse(
           request,

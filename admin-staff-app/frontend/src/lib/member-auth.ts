@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
+import { slugifyGymName } from "gymos-admin-backend/lib/gym-time";
 import GymModel from "gymos-admin-backend/models/gym";
+import { extractGymSlugFromPathname } from "@/lib/gym-routing";
 import { MEMBER_SESSION_COOKIE } from "@/lib/member-session";
 import { getAllowedOriginsSet, isPreviewModeEnabled, isPreviewOriginUrl } from "@/lib/security";
+import { RESERVED_SUBDOMAINS } from "@/lib/tenant-domain";
 
 export function getAllowedMemberOrigins() {
   return getAllowedOriginsSet();
@@ -90,18 +93,144 @@ export function buildPhoneCandidates(rawPhone: string): string[] {
   return [...candidates].filter(Boolean);
 }
 
+function extractSubdomainCandidateFromHost(hostname: string): string | null {
+  const host = hostname.trim().toLowerCase().replace(/:\d+$/, "");
+  if (
+    !host ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host.endsWith(".onrender.com") ||
+    host.endsWith(".e2b.app")
+  ) {
+    return null;
+  }
+  const parts = host.split(".");
+  if (parts.length < 3) return null;
+  const candidate = parts[0];
+  if (!candidate || RESERVED_SUBDOMAINS.has(candidate)) return null;
+  return candidate;
+}
+
+export function extractGymIdentifierFromQrOrInput(rawInput: string): string {
+  const trimmed = rawInput.trim();
+  if (!trimmed) return "";
+
+  const prefix = "GYMOS-GYM:";
+  if (trimmed.toUpperCase().startsWith(prefix)) {
+    return trimmed.slice(prefix.length).trim();
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const qrParam =
+        parsed.searchParams.get("qr")?.trim() ||
+        parsed.searchParams.get("gymSlug")?.trim() ||
+        parsed.searchParams.get("gym")?.trim();
+      if (qrParam) {
+        return qrParam.toUpperCase().startsWith(prefix)
+          ? qrParam.slice(prefix.length).trim()
+          : qrParam;
+      }
+      const pathSlug = extractGymSlugFromPathname(parsed.pathname);
+      if (pathSlug) return pathSlug;
+      const hostSub = extractSubdomainCandidateFromHost(parsed.hostname);
+      if (hostSub) return hostSub;
+    } catch {
+      // Fall through to plain-string matching.
+    }
+  }
+
+  const normalizedSlashPath = trimmed.startsWith("gym/") ? `/${trimmed}` : trimmed;
+  if (normalizedSlashPath.startsWith("/gym/")) {
+    const pathSlug = extractGymSlugFromPathname(normalizedSlashPath.split("?")[0]);
+    if (pathSlug) return pathSlug;
+  }
+
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+){1,}$/i.test(trimmed) && !trimmed.includes(" ")) {
+    const firstPart = trimmed.split(".")[0]?.toLowerCase() ?? "";
+    if (firstPart && !RESERVED_SUBDOMAINS.has(firstPart)) {
+      return firstPart;
+    }
+  }
+
+  return trimmed;
+}
+
+export function matchesGymQrOrCode(
+  rawInput: string,
+  gym: { id: string; slug: string; subdomain?: string | null },
+): boolean {
+  const candidate = extractGymIdentifierFromQrOrInput(rawInput);
+  if (!candidate) return false;
+  if (candidate === gym.id) return true;
+  const lower = candidate.toLowerCase();
+  if (lower === gym.slug.toLowerCase()) return true;
+  if (gym.subdomain && lower === gym.subdomain.trim().toLowerCase()) return true;
+  return false;
+}
+
+export async function findGymFromQrOrCode(rawInput: string) {
+  const trimmed = rawInput.trim();
+  if (!trimmed) return { kind: "not_found" as const };
+
+  if (/^(OWN|STF)-/i.test(trimmed)) {
+    return { kind: "staff_invite" as const };
+  }
+  if (/^TRN-/i.test(trimmed)) {
+    return { kind: "trainer_invite" as const };
+  }
+
+  const identifier = extractGymIdentifierFromQrOrInput(trimmed);
+  if (!identifier) return { kind: "not_found" as const };
+
+  if (Types.ObjectId.isValid(identifier)) {
+    const byId = await GymModel.findById(identifier);
+    if (byId) return { kind: "found" as const, gym: byId };
+  }
+
+  const lower = identifier.toLowerCase();
+  const bySlugOrSubdomain = await GymModel.findOne({
+    $or: [{ slug: lower }, { subdomain: lower }],
+  });
+  if (bySlugOrSubdomain) {
+    return { kind: "found" as const, gym: bySlugOrSubdomain };
+  }
+
+  const slugified = slugifyGymName(identifier);
+  if (slugified && slugified !== "gymos" && slugified !== lower) {
+    const bySlugified = await GymModel.findOne({
+      $or: [{ slug: slugified }, { subdomain: slugified.replace(/-/g, "") }],
+    });
+    if (bySlugified) {
+      return { kind: "found" as const, gym: bySlugified };
+    }
+  }
+
+  const escapedName = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const byExactName = await GymModel.find({
+    name: new RegExp(`^${escapedName}$`, "i"),
+  }).limit(2);
+  if (byExactName.length === 1) {
+    return { kind: "found" as const, gym: byExactName[0] };
+  }
+
+  return { kind: "not_found" as const };
+}
+
 /**
- * Resolves an explicit gym code or ObjectId. Never falls back to an arbitrary or global gym.
+ * Resolves an explicit gym code, subdomain, QR payload, or ObjectId. Never falls back to an arbitrary or global gym.
  */
 export async function resolveMemberGym(gymCode: unknown) {
   const code = typeof gymCode === "string" ? gymCode.trim() : "";
   if (!code) {
     return null;
   }
-  if (Types.ObjectId.isValid(code)) {
-    return GymModel.findOne({ _id: code, status: "active" });
+  const lookup = await findGymFromQrOrCode(code);
+  if (lookup.kind === "found" && lookup.gym.status === "active") {
+    return lookup.gym;
   }
-  return GymModel.findOne({ slug: code.toLowerCase(), status: "active" });
+  return null;
 }
 
 function getMemberCookieOptions(request: Request | undefined, maxAge: number) {

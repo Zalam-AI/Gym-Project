@@ -316,6 +316,13 @@ const EXACT_AR: Record<string, string> = {
   "The GymOS server is waking up or temporarily unavailable. Please wait a few seconds and try again.":
     "خادم GymOS قيد التشغيل أو غير متاح مؤقتاً. يرجى الانتظار ثوانٍ قليلة والمحاولة مرة أخرى.",
   "Enter a valid phone number.": "يرجى إدخال رقم هاتف صالح.",
+  "That is a Staff/Owner invite code for the web portal. Scan the Reception QR code or enter the gym code instead.":
+    "هذا رمز دعوة للموظفين/المالك لبوابة الويب. امسح رمز QR بالاستقبال أو أدخل رمز النادي بدلاً من ذلك.",
+  "That is a Trainer invite code. Sign out and choose the Trainer tab on the sign-in screen to redeem it.":
+    "هذا رمز دعوة للمدربين. سجّل الخروج واختر تبويب المدرب في شاشة الدخول لاستخدامه.",
+  "This gym workspace is pending approval. Activate it in the Super Admin dashboard first.":
+    "هذا النادي بانتظار الاعتماد. يرجى تفعيله من لوحة المدير العام أولاً.",
+  "This gym workspace is currently suspended.": "هذا النادي موقوف حالياً.",
 
   // Split JSX Text Fragments
   "Next:": "التالي:",

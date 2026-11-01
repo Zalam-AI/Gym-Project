@@ -6,6 +6,7 @@ import MemberModel from "gymos-admin-backend/models/member";
 import MembershipPlanModel from "gymos-admin-backend/models/membership-plan";
 import MembershipRequestModel from "gymos-admin-backend/models/membership-request";
 import {
+  findGymFromQrOrCode,
   isAllowedMemberOrigin,
   memberApiOptions,
   memberApiResponse,
@@ -32,28 +33,6 @@ export const runtime = "nodejs";
 
 const VALID_PAYMENT_METHODS = ["Cash", "Card", "Instapay"] as const;
 type PaymentMethod = (typeof VALID_PAYMENT_METHODS)[number];
-
-async function findGymFromQrPayload(rawQr: string) {
-  const trimmed = rawQr.trim();
-  if (!trimmed) return null;
-
-  const prefix = "GYMOS-GYM:";
-  if (trimmed.toUpperCase().startsWith(prefix)) {
-    const idPart = trimmed.slice(prefix.length).trim();
-    if (Types.ObjectId.isValid(idPart)) {
-      const byId = await GymModel.findOne({ _id: idPart, status: "active" });
-      if (byId) return byId;
-    }
-    return GymModel.findOne({ slug: idPart.toLowerCase(), status: "active" });
-  }
-
-  if (Types.ObjectId.isValid(trimmed)) {
-    const byId = await GymModel.findOne({ _id: trimmed, status: "active" });
-    if (byId) return byId;
-  }
-
-  return GymModel.findOne({ slug: trimmed.toLowerCase(), status: "active" });
-}
 
 async function authenticateVerifiedMember(request: NextRequest) {
   const session = await verifyMemberSessionToken(
@@ -178,12 +157,51 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const gym = await findGymFromQrPayload(qr);
-    if (!gym) {
+    const qrLookup = await findGymFromQrOrCode(qr);
+    if (qrLookup.kind === "staff_invite") {
+      return memberApiResponse(
+        request,
+        {
+          error:
+            "That is a Staff/Owner invite code for the web portal. Scan the Reception QR code or enter the gym code instead.",
+        },
+        400,
+      );
+    }
+    if (qrLookup.kind === "trainer_invite") {
+      return memberApiResponse(
+        request,
+        {
+          error:
+            "That is a Trainer invite code. Sign out and choose the Trainer tab on the sign-in screen to redeem it.",
+        },
+        400,
+      );
+    }
+    if (qrLookup.kind === "not_found") {
       return memberApiResponse(
         request,
         { error: "Invalid QR code. Scan the Reception QR code displayed at the gym front desk." },
         404,
+      );
+    }
+
+    const gym = qrLookup.gym;
+    if (gym.status === "pending") {
+      return memberApiResponse(
+        request,
+        {
+          error:
+            "This gym workspace is pending approval. Activate it in the Super Admin dashboard first.",
+        },
+        403,
+      );
+    }
+    if (gym.status !== "active") {
+      return memberApiResponse(
+        request,
+        { error: "This gym workspace is currently suspended." },
+        403,
       );
     }
 

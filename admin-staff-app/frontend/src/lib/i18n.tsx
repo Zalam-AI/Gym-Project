@@ -977,6 +977,11 @@ const EN_WEEKDAYS: Record<string, string> = {
   Thu: "الخميس",
   Fri: "الجمعة",
   Sat: "السبت",
+  "Mobile App Reception QR & Gym Code": "رمز QR للاستقبال ورمز النادي للتطبيق",
+  "Members & trainers scan this QR (or enter the gym code) in the Mobile App to connect & check in.":
+    "يمسح الأعضاء والمدربون رمز QR هذا (أو يدخلون رمز النادي) في تطبيق الجوال للربط وتسجيل الحضور.",
+  "Copy gym code": "نسخ رمز النادي",
+  Copied: "تم النسخ",
 };
 
 function translateStatusWord(word: string): string {

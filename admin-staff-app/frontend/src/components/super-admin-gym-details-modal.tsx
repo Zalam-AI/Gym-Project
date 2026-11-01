@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import {
   Building2,
   Calendar,
+  Check,
+  Copy,
   CreditCard,
   ExternalLink,
   LoaderCircle,
@@ -13,6 +15,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 type GymDetailPayload = {
   id: string;
@@ -166,6 +169,7 @@ export function SuperAdminGymDetailsModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
     if (!gymId) {
@@ -349,6 +353,47 @@ export function SuperAdminGymDetailsModal({
                         : "Unclaimed — issue owner invite code"}
                     </p>
                   </div>
+                </div>
+
+                {/* Mobile App Reception QR & Gym Code */}
+                <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3.5">
+                    <div className="grid size-24 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white p-1.5">
+                      <QRCodeSVG
+                        value={`GYMOS-GYM:${detail.id}`}
+                        size={84}
+                        level="M"
+                        fgColor="#172433"
+                        bgColor="#ffffff"
+                        title="Mobile App Reception QR Code"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold text-slate-800">
+                        Mobile App Reception QR &amp; Gym Code
+                      </p>
+                      <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                        Members &amp; trainers scan this QR (or enter the gym code) in the Mobile App to connect &amp; check in.
+                      </p>
+                      <p className="mt-1.5 font-mono text-[11px] text-slate-700">
+                        Gym code:{" "}
+                        <span className="font-semibold text-emerald-700">{detail.slug}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(detail.slug).then(() => {
+                        setCopiedCode(true);
+                        setTimeout(() => setCopiedCode(false), 1800);
+                      });
+                    }}
+                    className="inline-flex min-h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    {copiedCode ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                    <span>{copiedCode ? "Copied" : "Copy gym code"}</span>
+                  </button>
                 </div>
               </section>
 
